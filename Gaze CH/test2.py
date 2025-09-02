@@ -275,5 +275,5 @@ def clear_console():
     os.system('cls' if os.name == 'nt' else 'clear')
 if __name__ == "__main__":
     main()
-# pip install -r gaze-estimation-main/requirements.txt*/
-# python test2.py --source 0 --model gaze-estimation-main\weights\mobileone_s0_gaze.onnx
+# pip install -r reqs.txt*/
+# python test2.py --source 0 --model mobileone_s0_gaze.onnx
