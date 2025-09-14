@@ -1,6 +1,6 @@
 import cv2
 import logging
-import argparse
+import argparse 
 import warnings
 import numpy as np
 import torch
@@ -13,12 +13,32 @@ import uniface
 from typing import Tuple
 import onnxruntime as ort
 
+
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
+Frame = cv2.VideoCapture(0)
 
-LEFT_EYE = [362, 385, 387, 263, 373, 380]
-RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+blink_counter = 0
+BLINK_CONSEC_FRAMES = 1
+
+LEFT_EYE = [362, 385, 387, 263, 373, 380] # Right eye indices from MediaPipe using dlib library
+RIGHT_EYE = [33, 160, 158, 133, 153, 144] # Left eye indices from MediaPipe using dlib library
+
+#set up and store calibration data pairs: [gaze_predection] -> [screen_point]
+calibration_gaze= []
+calibration_screen= []
+
+#define 5 calibration points on the screen (normalized coordinates [0,1])
+
+calibration_points =[
+    (0.1,0.1), #top left
+    (0.9,0.1), #top right
+    (0.5,0.5), #center
+    (0.1,0.9), #bottom left
+    (0.9,0.9)  #bottom right
+]
+
 
 
 def draw_gaze(frame, bbox, pitch, yaw, thickness=2, color=(0, 0, 255)):
@@ -132,6 +152,8 @@ class GazeEstimationTorch:
         input_tensor = self.preprocess(face_image)
         outputs = self.session.run(None, {self.input_name: input_tensor})
         pitch, yaw = outputs  # adjust if output format differs
+        print("[DEBUG] ONNX output shapes:", [o.shape for o in outputs])
+
 
         pitch = torch.softmax(torch.tensor(pitch), dim=1).numpy()
         yaw = torch.softmax(torch.tensor(yaw), dim=1).numpy()
@@ -140,6 +162,52 @@ class GazeEstimationTorch:
         yaw = np.sum(yaw * self.idx_tensor) * self._binwidth - self._angle_offset
 
         return np.radians(pitch), np.radians(yaw)
+
+
+def run_calibration(cap, engine, detector):
+    global calibration_gaze, calibration_screen
+    swidth, sheight = pyautogui.size()
+
+    for norm_x, norm_y in calibration_points:
+        target_x, target_y = int(norm_x * swidth), int(norm_y * sheight)
+
+        #show target point
+        calib_frame = np.zeros((500, 500, 3), dtype=np.uint8) #black screen
+        calib_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
+        cv2.circle(calib_frame, (target_x, target_y), 20, (0, 255, 0), -1)
+        cv2.imshow("Calibration", calib_frame)
+        cv2.imshow("Calibration", calib_frame)
+        cv2.waitKey(2000) #wait 2 seconds
+
+        #capture frame and detect face abd get the predection
+        ret, frame = cap.read()
+        if not ret: continue
+
+        bboxes, _ = detector.detect(frame)
+        if len(bboxes) == 0: continue #no face detected, skip
+
+        x_min, y_min, x_max, y_max = map(int, bboxes[0][:4])
+        face_img = frame[y_min:y_max, x_min:x_max]
+        pitch, yaw = engine.estimate(face_img)
+        if face_img.size == 0: continue #invalid face image, skip
+        calibration_gaze.append((pitch, yaw))
+        calibration_screen.append((target_x, target_y))
+
+    cv2.destroyAllWindows()
+    print("Calibration complete.")
+
+    #fit a polynomial regression model to map gaze to screen points
+    calibration_gaze = np.array(calibration_gaze)
+    calibration_screen = np.array(calibration_screen)
+    X = np.hstack([calibration_gaze, np.ones((len(calibration_gaze), 1))]) #add bias term
+    Y = calibration_screen
+    coeffs,_,_,_ = np.linalg.lstsq(X, Y, rcond=None) #linear regression
+    return coeffs
+
+def predict_with_calibration(pitch, yaw, coeffs):
+    gaze_vector = np.array([pitch, yaw, 1.0])#add bias term
+    screen_point = gaze_vector@coeffs
+    return int(screen_point[0]), int(screen_point[1])
 
 def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int, 
                  face_center_x: int, face_center_y: int) -> Tuple[int, int]:
@@ -155,11 +223,20 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
 
 def main():
     args = parse_args()
+    #print(f"[DEBUG] Using model: {args.model}")
+    #print(f"[DEBUG] Using source: {args.source}")
     
     # Initialize components - ONLY pass model_path here
     engine = GazeEstimationTorch(args.model)  # Fixed this line
+
     detector = uniface.RetinaFace()
     
+    cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
+    if not cap.isOpened():
+        print("[ERROR] Could not open video source")
+        return
+    coeffs = run_calibration(cap, engine, detector)
+
     # Rest of your main function remains the same...
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=False,
@@ -169,7 +246,11 @@ def main():
         min_tracking_confidence=0.5
     )
 
+
     cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
+    if not cap.isOpened():
+        print("[ERROR] Could not open video source")
+        return
     writer = None
     if args.output:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -196,7 +277,10 @@ def main():
             # Visualization and mouse control code...
             draw_bbox_gaze(frame, bbox, pitch, yaw)
             face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
-            gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0], 
+            if coeffs is not None:
+                gaze_x, gaze_y = predict_with_calibration(pitch, yaw, coeffs)
+            else:
+                gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0], 
                                          face_center_x, face_center_y)
             cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
 
@@ -267,8 +351,7 @@ def main():
         writer.release()
     #cv2.destroyAllWindows()
 
-blink_counter = 0
-BLINK_CONSEC_FRAMES = 1
+
 mp_face_mesh = mp.solutions.face_mesh
 def clear_console():
     import os
