@@ -17,7 +17,7 @@ import onnxruntime as ort
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-Frame = cv2.VideoCapture(0)
+Frame = cv2.VideoCapture(1)
 
 blink_counter = 0
 BLINK_CONSEC_FRAMES = 1
@@ -293,27 +293,15 @@ def main():
             dx = gaze_x - frame_center_x
             dy = gaze_y - frame_center_y
             clear_console()
-            if abs(dx) > deadzone_threshold or abs(dy) > deadzone_threshold:
-                dir_x = 1 if dx > 0 else -1 if dx < 0 else 0
-                dir_y = 1 if dy > 0 else -1 if dy < 0 else 0
-                
-                if abs(dx) > abs(dy):
-                    if dx > 0:
-                        print("Looking RIGHT")
-                    else:
-                        print("Looking LEFT")
-                else:
-                    if dy > 0:
-                        print("Looking DOWN")
-                    else:
-                        print("Looking UP")
-
-                if abs(dx) > abs(dy):
-                    pyautogui.moveRel(-dir_x * speed, 0, duration=0.05)
-                else:
-                    pyautogui.moveRel(0, dir_y * speed, duration=0.05)
+            norm = math.hypot(dx, dy)
+            if norm > deadzone_threshold:
+                move_x = int(speed * dx / norm)
+                move_y = int(speed * dy / norm)
+                pyautogui.moveRel(move_x, move_y, duration=0.05)
+                print(f"Moving cursor: ({move_x}, {move_y})")
             else:
                 print("DEADZONE")
+
                 #cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60), 
                  #         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
             # BLINKING START
@@ -342,9 +330,9 @@ def main():
         if writer:
             writer.write(frame)
             
-        #cv2.imshow("Gaze Tracking", frame)
-        #if cv2.waitKey(1) == ord('q'):
-        #    break
+        cv2.imshow("Gaze Tracking", frame)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
     cap.release()
     if writer:
