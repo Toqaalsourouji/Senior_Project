@@ -1,0 +1,41 @@
+RBPCC : GUIDE
+
+python 3.10.9
+pip 25.2
+
+first open the terminal. 
+then write the following commands.
+cd Gaze
+cd Gaze3-python3.10.9 
+source gaze_env_3.11/bin/activate
+cd Senior_Project
+cd Gaze CH
+
+** to run RBPCC_v2.py **
+
+# Default settings
+python RBPCC_v2.py --source 0 --model mobileone_s0_gaze.onnx
+
+# More sensitive direction detection (detect smaller movements)
+python RBPCC_v2.py --source 0 --model mobileone_s0_gaze.onnx --direction-threshold 0.15
+
+# Less sensitive (need bigger head movements)
+python RBPCC_v2.py --source 0 --model mobileone_s0_gaze.onnx --direction-threshold 0.4
+
+# See all directions in console without display
+python RBPCC_v2.py --source 0 --model mobileone_s0_gaze.onnx --no-display
+
+------------------------------------------------------------------------------------
+
+** to run RBPCC_v1_headless ** 
+# Basic usage (processes every 2nd frame)
+python headless_gaze.py --model mobileone_s0_gaze.onnx
+
+# Maximum speed (skip more frames)
+python RBPCC_v1_headless.py --model mobileone_s0_gaze.onnx --frame-skip 4
+
+# Verbose mode (see all updates)
+python RBPCC_v1_headless.py --model mobileone_s0_gaze.onnx --verbose
+
+# Without mouse control (testing only)
+python RBPCC_v1_headless.py --model mobileone_s0_gaze.onnx --no-mouse
