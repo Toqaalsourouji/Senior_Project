@@ -4,9 +4,10 @@ import argparse
 import warnings
 import numpy as np
 import math
+import time
 import mediapipe as mp
 import pyautogui
-from typing import Tuple
+from typing import Tuple, Optional
 import onnxruntime as ort
 
 warnings.filterwarnings("ignore")
@@ -84,6 +85,8 @@ def parse_args():
     parser.add_argument("--output", type=str, default=None, help="Output video path")
     parser.add_argument("--no-mouse", action="store_true", help="Disable mouse control")
     parser.add_argument("--no-display", action="store_true", help="Run headless without display")
+    parser.add_argument("--no-blink", action="store_true", help="Disable blink detection for performance")
+    parser.add_argument("--frame-skip", type=int, default=3, help="Process every Nth frame (default: 3)")
     return parser.parse_args()
 
 class GazeEstimation:
@@ -153,35 +156,80 @@ class GazeEstimation:
         
         return np.radians(pitch), np.radians(yaw)
 
-class SimpleFaceDetector:
-    """Simple face detector using OpenCV Haar Cascades."""
+class OptimizedFaceDetector:
+    """Optimized face detector with tracking for better performance."""
     
     def __init__(self):
-        # Use Haar Cascade for face detection (lightweight for Pi Zero)
+        # Use Haar Cascade for initial detection
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
         
         if self.face_cascade.empty():
             raise Exception("Failed to load face cascade classifier")
-    
-    def detect(self, frame):
-        """Detect faces and return bboxes in uniface format."""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Detect faces with adjusted parameters for Pi Zero performance
+        # Initialize tracker
+        self.tracker = None
+        self.tracking = False
+        self.detection_scale = 0.5  # Scale down for detection
+        self.frames_since_detection = 0
+        self.redetect_interval = 30  # Redetect every 30 frames
+    
+    def detect_faces(self, frame):
+        """Detect faces in frame with downscaling for speed."""
+        # Downscale for detection
+        small_frame = cv2.resize(frame, None, fx=self.detection_scale, fy=self.detection_scale)
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        
+        # Detect with optimized parameters
         faces = self.face_cascade.detectMultiScale(
             gray, 
-            scaleFactor=1.1, 
-            minNeighbors=3,
-            minSize=(30, 30)
+            scaleFactor=1.2,  # Faster scanning
+            minNeighbors=4,   # Balance between speed and accuracy
+            minSize=(40, 40)  # Skip very small faces
         )
         
-        # Convert to bbox format [x_min, y_min, x_max, y_max, confidence]
+        # Scale coordinates back up
         bboxes = []
         for (x, y, w, h) in faces:
+            scale_inv = 1.0 / self.detection_scale
+            x, y, w, h = int(x * scale_inv), int(y * scale_inv), int(w * scale_inv), int(h * scale_inv)
             bboxes.append([x, y, x + w, y + h, 1.0])
         
-        return bboxes, None  # Return format compatible with original code
+        return bboxes
+    
+    def detect_or_track(self, frame):
+        """Use tracking when possible, redetect periodically."""
+        self.frames_since_detection += 1
+        
+        # Try tracking first if we have a tracker
+        if self.tracking and self.tracker is not None:
+            success, box = self.tracker.update(frame)
+            
+            if success and self.frames_since_detection < self.redetect_interval:
+                # Successful tracking
+                x, y, w, h = [int(v) for v in box]
+                return [[x, y, x + w, y + h, 1.0]], None
+            else:
+                # Tracking failed or time to redetect
+                self.tracking = False
+                self.tracker = None
+        
+        # Perform detection
+        bboxes = self.detect_faces(frame)
+        
+        if bboxes:
+            # Initialize tracker with first detected face
+            bbox = bboxes[0]
+            x, y = int(bbox[0]), int(bbox[1])
+            w, h = int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
+            
+            # Use KCF tracker (good balance of speed and accuracy)
+            self.tracker = cv2.TrackerKCF_create()
+            self.tracker.init(frame, (x, y, w, h))
+            self.tracking = True
+            self.frames_since_detection = 0
+        
+        return bboxes, None
 
 def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
                  face_center_x: int, face_center_y: int) -> Tuple[int, int]:
@@ -201,6 +249,8 @@ def main():
     
     # Initialize components
     print("Initializing gaze estimation system...")
+    print(f"Frame skip: Processing every {args.frame_skip} frames")
+    print(f"Blink detection: {'Disabled' if args.no_blink else 'Enabled'}")
     
     try:
         engine = GazeEstimation(args.model)
@@ -208,20 +258,23 @@ def main():
         print(f"Failed to load model: {e}")
         return
     
-    detector = SimpleFaceDetector()
+    detector = OptimizedFaceDetector()
     
-    # Initialize MediaPipe face mesh for blink detection
-    try:
-        face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-    except Exception as e:
-        print(f"Warning: MediaPipe initialization failed: {e}")
-        face_mesh = None
+    # Initialize MediaPipe face mesh for blink detection (if enabled)
+    face_mesh = None
+    if not args.no_blink:
+        try:
+            face_mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            print("Blink detection initialized")
+        except Exception as e:
+            print(f"Warning: MediaPipe initialization failed: {e}")
+            print("Continuing without blink detection")
     
     # Open video capture
     cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
@@ -229,20 +282,29 @@ def main():
         print("[ERROR] Could not open video source")
         return
     
-    # Optional: reduce resolution for better performance on Pi Zero
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # Set lower resolution for better performance
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    cap.set(cv2.CAP_PROP_FPS, 15)
+    
+    print(f"Camera resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
     
     writer = None
     if args.output:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         writer = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"),
-                               cap.get(cv2.CAP_PROP_FPS) or 30, (width, height))
+                               cap.get(cv2.CAP_PROP_FPS) or 15, (width, height))
     
+    # Blink detection variables
     blink_counter = 0
     BLINK_CONSEC_FRAMES = 1
+    
+    # Performance tracking
     frame_count = 0
+    fps_timer = time.time()
+    fps_counter = 0
+    current_fps = 0
     
     print("Starting main loop. Press 'q' to quit.")
     
@@ -252,15 +314,22 @@ def main():
             break
         
         frame_count += 1
+        fps_counter += 1
         
-        # Skip frames for performance on Pi Zero (process every 2nd frame)
-        if frame_count % 2 != 0:
+        # Calculate FPS every second
+        if time.time() - fps_timer > 1.0:
+            current_fps = fps_counter
+            fps_counter = 0
+            fps_timer = time.time()
+        
+        # Skip frames for performance
+        if frame_count % args.frame_skip != 0:
             continue
         
-        # Detect faces
-        bboxes, _ = detector.detect(frame)
+        # Detect or track faces
+        bboxes, _ = detector.detect_or_track(frame)
         
-        for bbox in bboxes:
+        for bbox in bboxes[:1]:  # Process only first face for performance
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
             face_img = frame[y_min:y_max, x_min:x_max]
             
@@ -276,15 +345,15 @@ def main():
             face_center_y = (y_min + y_max) // 2
             gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0],
                                          face_center_x, face_center_y)
-            cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
+            cv2.circle(frame, (gaze_x, gaze_y), 8, (0, 0, 255), -1)
             
             # Mouse control (if enabled)
             if not args.no_mouse:
                 frame_height, frame_width = frame.shape[:2]
                 frame_center_x = frame_width // 2
                 frame_center_y = frame_height // 2
-                deadzone_threshold = 0.5 * min(frame_width, frame_height) / 2
-                speed = 10  # Reduced for Pi Zero
+                deadzone_threshold = 0.4 * min(frame_width, frame_height) / 2
+                speed = 8  # Optimized for Pi Zero
                 dx = gaze_x - frame_center_x
                 dy = gaze_y - frame_center_y
                 
@@ -297,38 +366,50 @@ def main():
                     else:
                         pyautogui.moveRel(0, dir_y * speed, duration=0.01)
                 else:
-                    cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60),
-                              cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                    cv2.putText(frame, "DZ", (frame.shape[1] - 40, 30),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
-            # Blink detection (if MediaPipe is available)
-            if face_mesh is not None:
-                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(image_rgb)
-                
-                if results.multi_face_landmarks:
-                    face_landmarks = results.multi_face_landmarks[0]
-                    h, w, _ = frame.shape
-                    landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
+            # Blink detection (if enabled and MediaPipe is available)
+            if face_mesh is not None and not args.no_blink:
+                # Only process blink detection every few frames for performance
+                if frame_count % (args.frame_skip * 2) == 0:
+                    image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = face_mesh.process(image_rgb)
                     
-                    left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
-                    right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
-                    avg_ear = (left_ear + right_ear) / 2.0
-                    
-                    if avg_ear < 0.2:
-                        blink_counter += 1
-                    else:
-                        blink_counter = 0
-                    
-                    if blink_counter >= BLINK_CONSEC_FRAMES and not args.no_mouse:
-                        print("BLINK DETECTED - Click")
-                        pyautogui.click()
-                        blink_counter = 0
+                    if results.multi_face_landmarks:
+                        face_landmarks = results.multi_face_landmarks[0]
+                        h, w, _ = frame.shape
+                        landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
+                        
+                        left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
+                        right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
+                        avg_ear = (left_ear + right_ear) / 2.0
+                        
+                        if avg_ear < 0.2:
+                            blink_counter += 1
+                            if blink_counter >= BLINK_CONSEC_FRAMES and not args.no_mouse:
+                                print("BLINK - Click!")
+                                pyautogui.click()
+                                blink_counter = 0
+                                # Visual feedback for blink
+                                cv2.putText(frame, "BLINK!", (10, 60),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        else:
+                            blink_counter = 0
         
         # Display frame (unless running headless)
         if not args.no_display:
-            # Add FPS counter
-            cv2.putText(frame, f"Frame: {frame_count}", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Add performance info
+            cv2.putText(frame, f"FPS: {current_fps}", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            
+            if detector.tracking:
+                cv2.putText(frame, "Mode: Tracking", (10, 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            else:
+                cv2.putText(frame, "Mode: Detecting", (10, 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            
             cv2.imshow("Gaze Tracking", frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
