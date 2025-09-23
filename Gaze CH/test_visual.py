@@ -3,16 +3,15 @@ import logging
 import argparse
 import warnings
 import numpy as np
+import torch
+import torch.nn.functional as F
+from torchvision import transforms
 import math
 import mediapipe as mp
+import pyautogui
 import uniface
 from typing import Tuple
 import onnxruntime as ort
-import time
-from collections import deque
-from pynput.mouse import Controller, Button
-mouse = Controller()
-
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -20,6 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 LEFT_EYE = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+pyautogui.FAILSAFE = False
 
 def draw_gaze(frame, bbox, pitch, yaw, thickness=2, color=(0, 0, 255)):
     """Draws gaze direction on a frame given bounding box and gaze angles."""
@@ -102,10 +102,6 @@ def parse_args():
     parser.add_argument("--output", type=str, default=None, help="Output video path")
     return parser.parse_args()
 
-
-def softmax_np(x):
-    e_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-    return e_x / e_x.sum(axis=1, keepdims=True)
 class GazeEstimationTorch:
     def __init__(self, model_path: str):
         # Model config
@@ -122,22 +118,23 @@ class GazeEstimationTorch:
         self.input_name = self.session.get_inputs()[0].name
 
     def preprocess(self, image: np.ndarray) -> np.ndarray:
+        transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize(self.input_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=self.input_mean, std=self.input_std)
+        ])
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = cv2.resize(image, self.input_size)
-        image = image.astype(np.float32) / 255.0
-        image = (image - np.array(self.input_mean, dtype=np.float32)) / np.array(self.input_std, dtype=np.float32)
-        image = np.transpose(image, (2, 0, 1))  # HWC -> CHW
-        return np.expand_dims(image, axis=0).astype(np.float32)
-
+        tensor = transform(image).unsqueeze(0).numpy()  # to numpy for ONNX
+        return tensor
 
     def estimate(self, face_image: np.ndarray) -> Tuple[float, float]:
         input_tensor = self.preprocess(face_image)
         outputs = self.session.run(None, {self.input_name: input_tensor})
         pitch, yaw = outputs  # adjust if output format differs
 
-
-        pitch = softmax_np(pitch)
-        yaw   = softmax_np(yaw) 
+        pitch = torch.softmax(torch.tensor(pitch), dim=1).numpy()
+        yaw = torch.softmax(torch.tensor(yaw), dim=1).numpy()
 
         pitch = np.sum(pitch * self.idx_tensor) * self._binwidth - self._angle_offset
         yaw = np.sum(yaw * self.idx_tensor) * self._binwidth - self._angle_offset
@@ -156,18 +153,13 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
         np.clip(gaze_y, 0, height-1)
     )
 
-def time_calculator(start_inf, label=""):
-    end_inf = time.time()
-    calc_time = end_inf - start_inf
-    print(f"{label} time: {calc_time*1000:.2f} ms")
-
 def main():
     args = parse_args()
     
     # Initialize components - ONLY pass model_path here
     engine = GazeEstimationTorch(args.model)  # Fixed this line
     detector = uniface.RetinaFace()
-    # detector.detect(cv2.resize(frame, (640, 360)))
+    print(engine)
     # Rest of your main function remains the same...
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=False,
@@ -176,8 +168,6 @@ def main():
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
-    blink_counter = 0
-
 
     cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
     writer = None
@@ -189,34 +179,28 @@ def main():
 
     # Rest of your gaze tracking and blink detection code...
     while cap.isOpened():
-        start_time = time.time() #TIME CALC
         ret, frame = cap.read()
-        time_calculator(start_time, "Cam capture") #TIME END
         if not ret:
             break
-        start_time = time.time() #TIME CALC
+
         bboxes, _ = detector.detect(frame)
-        time_calculator(start_time, "detector") #TIME END
         for bbox in bboxes:
-            start_time = time.time() #TIME CALC
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
             face_img = frame[y_min:y_max, x_min:x_max]
             
             if face_img.size == 0:
                 continue
-            
+                
             pitch, yaw = engine.estimate(face_img)
-            time_calculator(start_time, "Gaze Inference") #TIME END
+            
             # Visualization and mouse control code...
-            start_time = time.time() #TIME CALC
             draw_bbox_gaze(frame, bbox, pitch, yaw)
             face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
             gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0], 
                                          face_center_x, face_center_y)
             cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
-            time_calculator(start_time, "bbox draw") #TIME END
+
             # Mouse control implementation...
-            start_time = time.time() #TIME CALC
             frame_height, frame_width = frame.shape[:2]
             frame_center_x = frame_width // 2
             frame_center_y = frame_height // 2
@@ -224,28 +208,21 @@ def main():
             speed = 15 # old 35
             dx = gaze_x - frame_center_x
             dy = gaze_y - frame_center_y
-            time_calculator(start_time, "mouse ctrl calcluation") #TIME END
-            start_time = time.time() #TIME CALC
+            
             if abs(dx) > deadzone_threshold or abs(dy) > deadzone_threshold:
                 dir_x = 1 if dx > 0 else -1 if dx < 0 else 0
                 dir_y = 1 if dy > 0 else -1 if dy < 0 else 0
                 
-                new_x, new_y = mouse.position  # current position
                 if abs(dx) > abs(dy):
-                    new_x += dir_x * speed
+                    pyautogui.moveRel(dir_x * speed, 0, duration=0.05)
                 else:
-                    new_y += dir_y * speed
-
-                # Move mouse instantly
-                mouse.position = (new_x, new_y)
+                    pyautogui.moveRel(0, dir_y * speed, duration=0.05)
             else:
                 cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60), 
                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
                 
-            time_calculator(start_time, "mouse move end") #TIME END
 
             # BLINKING START
-            start_time = time.time() #TIME CALC
             is_blinking = False
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = face_mesh.process(image_rgb)
@@ -266,8 +243,8 @@ def main():
                 if blink_counter >= BLINK_CONSEC_FRAMES:
                     is_blinking = True
                     print("BLINKING")
-                    mouse.click(Button.left, 1)
-            time_calculator(start_time, "Blinking") #TIME END
+                    pyautogui.leftClick()
+
         if writer:
             writer.write(frame)
             
@@ -280,6 +257,7 @@ def main():
         writer.release()
     cv2.destroyAllWindows()
 
+blink_counter = 0
 BLINK_CONSEC_FRAMES = 1
 mp_face_mesh = mp.solutions.face_mesh
 
@@ -289,13 +267,4 @@ if __name__ == "__main__":
 
 # main()
 # pip install -r gaze-estimation-main/requirements.txt*/
-# python test_visual.py --source 0 --model mobileone_s0_gaze.onnx or model name
-# fps 4.9, 4.5, 3, removed pytorch fellas
-
-#Cam capture: 5.98
-#Detector: 72.81
-#Gaze inference: 27.67
-#BBox draw: 1.00
-#Mouse ctrl calc: 0.00
-#Mouse move: 0.00
-#Blinking: 6.98
+# python test.py --source 0 --model gaze-estimation-main\weights\resnet18_gaze.onnx or mobileone_s0_gaze.onnx
