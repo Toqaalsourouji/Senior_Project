@@ -158,8 +158,8 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
 
 def time_calculator(start_inf, label=""):
     end_inf = time.time()
-    inference_time = end_inf - start_inf
-    print(f"{label} time: {inference_time*1000:.2f} ms")
+    calc_time = end_inf - start_inf
+    print(f"{label} time: {calc_time*1000:.2f} ms")
 
 def main():
     args = parse_args()
