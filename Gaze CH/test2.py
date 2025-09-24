@@ -12,18 +12,71 @@ import pyautogui
 import uniface
 from typing import Tuple
 import onnxruntime as ort
+import time 
 
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
+#constants for blink detection (can me edited and epxermented with)
+EAR_CLOSE_THRESHOLD = 0.20 # Eye Aspect Ratio threshold to indicate closed eyes
+EAR_OPEN_THRESHOLD = 0.25  # Eye Aspect Ratio threshold to indicate open eyes
+BLINK_CONSEC_FRAMES = 2  # Number of consecutive frames the eye must be below the threshold
+ACTION_COOLDOWN_MS = 300  # Cooldown period after an action is triggered to avoid multiple triggers, i.e, debounce
+SCROLL_AMOUNT = 250  # Amount to scroll on each blink action (POSTIVE for up, NEGATIVE for down ) #check this approach and maybe change
+
+
 Frame = cv2.VideoCapture(1)
 
-blink_counter = 0
-BLINK_CONSEC_FRAMES = 1
+
 
 LEFT_EYE = [362, 385, 387, 263, 373, 380] # Right eye indices from MediaPipe using dlib library
 RIGHT_EYE = [33, 160, 158, 133, 153, 144] # Left eye indices from MediaPipe using dlib library
+
+def now_ms(): #current time in milliseconds
+    return int(time.time() * 1000)
+
+def eye_center(landmarks, eye_indices): #
+    xs = [landmarks[i][0] for i in eye_indices]
+    ys = [landmarks[i][1] for i in eye_indices]
+    return (sum(xs) / len(xs), sum(ys) / len(ys) ) #to get the center of the eye
+
+def polygon_center(landmarks, idxs):
+    xs = [landmarks[i][0] for i in idxs]
+    ys = [landmarks[i][1] for i in idxs]
+    return (sum(xs) / len(xs), sum(ys) / len(ys) ) #to get the center of the eye
+
+def right_eye_vertical_gaze(landmakrs, right_eye_indices): #function to determine vertical gaze direction for scrolling 
+    """" 
+    Hueristics to determine vertical gaze direction based on eye landmarks.: if the iris landmakrs exists
+    (refine_landmarks=True in mp.solutions.face_mesh.FaceMesh), we can use the iris center vs eyelid box.
+    Else, use eyeball center proxy from the eye polygon.
+    returns Up or down
+    """
+    top_candidates = [min(right_eye_indices, key = lambda i: landmakrs[i][1])]
+    bottom_candidates = [max(right_eye_indices, key = lambda i: landmakrs[i][1])]
+    top_y = sum(landmakrs[i][1] for i in top_candidates) / len(top_candidates)
+    bottom_y = sum(landmakrs[i][1] for i in bottom_candidates) / len(bottom_candidates)
+
+    #choose iris center if available
+    try:
+        iris_cx, iris_cy = polygon_center(landmakrs, RIGHT_EYE)
+        center_y = iris_cy
+    except:
+        #use gometric eye center
+        _,center_y = eye_center(landmakrs, RIGHT_EYE)
+    
+    # nromalized position of the center within the eye box ( 0= top, 1=bottom)
+    denom = max(1, bottom_y - top_y)
+    ratio = (center_y - top_y) / denom
+
+    #Thresholds can be adjusted based on user testing
+    if ratio < 0.35:
+        return "UP"
+    elif ratio > 0.65:
+        return "DOWN"
+    else:
+        return "CENTER"
 
 #set up and store calibration data pairs: [gaze_predection] -> [screen_point]
 calibration_gaze= []
@@ -225,6 +278,13 @@ def main():
     args = parse_args()
     #print(f"[DEBUG] Using model: {args.model}")
     #print(f"[DEBUG] Using source: {args.source}")
+
+    left_blink_frames = 0
+    right_blink_frames = 0
+    both_blink_frames = 0
+    last_blink_ms = 0 
+    blink_counter = 0
+    BLINK_CONSEC_FRAMES = 1
     
     # Initialize components - ONLY pass model_path here
     engine = GazeEstimationTorch(args.model)  # Fixed this line
@@ -237,6 +297,7 @@ def main():
         return
     coeffs = run_calibration(cap, engine, detector)
 
+    
     # Rest of your main function remains the same...
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=False,
@@ -308,6 +369,8 @@ def main():
             is_blinking = False
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = face_mesh.process(image_rgb)
+
+            
             if results.multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
                 h, w, _ = frame.shape
@@ -316,6 +379,66 @@ def main():
                 right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
                 avg_ear = (left_ear + right_ear) / 2.0
     
+                #Increment single / both eye blink counters and check for blink action
+                left_closed = left_ear < EAR_CLOSE_THRESHOLD
+                right_closed = right_ear < EAR_CLOSE_THRESHOLD
+                left_open = left_ear > EAR_OPEN_THRESHOLD
+                right_open = right_ear > EAR_OPEN_THRESHOLD
+
+                if left_closed and  right_closed:
+                    both_blink_frames += 1
+                    left_blink_frames = 0
+                    right_blink_frames = 0
+                elif left_closed and right_open:
+                    left_blink_frames += 1
+                    right_blink_frames = 0
+                    both_blink_frames = 0
+                elif right_closed and left_open:
+                    right_blink_frames += 1
+                    left_blink_frames = 0
+                    both_blink_frames = 0
+                else: #both eyes open
+                    left_blink_frames = 0
+                    right_blink_frames = 0
+                    both_blink_frames = 0
+                    is_blinking = False
+                
+                #trigger actions based on blink counts and cooldown
+                now = now_ms()
+                if now - last_blink_ms >= ACTION_COOLDOWN_MS:
+                    # DOUBLE-EYE BLINK --> left click
+                    if both_blink_frames >= BLINK_CONSEC_FRAMES:
+                        is_blinking = True
+                        print("DOUBLE BLINK - LEFT CLICK")
+                        pyautogui.leftClick()
+                        last_blink_ms = now
+                        both_blink_frames = 0
+                    
+                    # Right_eye blink --> right click
+                    elif right_blink_frames >= BLINK_CONSEC_FRAMES:
+                        is_blinking = True
+                        print("RIGHT EYE BLINK - RIGHT CLICK")
+                        pyautogui.rightClick()
+                        last_blink_ms = now
+                        right_blink_frames = 0
+                    
+                    # Left_eye blink --> scroll
+                    elif left_blink_frames >= BLINK_CONSEC_FRAMES:
+                        is_blinking = True
+                        direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
+                        if direction == "UP":
+                            print("LEFT EYE BLINK - SCROLL UP")
+                            pyautogui.scroll(SCROLL_AMOUNT) #scroll up
+                        elif direction == "DOWN":
+                            print("LEFT EYE BLINK - SCROLL DOWN")
+                            pyautogui.scroll(-SCROLL_AMOUNT) #scroll down
+                        else:
+                            print("LEFT EYE BLINK - NO SCROLL (CENTER GAZE)")
+                        last_blink_ms = now
+                        left_blink_frames = 0
+                    
+                
+                """""
                 if avg_ear < 0.2:
                     blink_counter += 1
                 else:
@@ -326,6 +449,8 @@ def main():
                     is_blinking = True
                     print("BLINKING")
                     pyautogui.leftClick()
+                    """""
+                    
 
         if writer:
             writer.write(frame)
