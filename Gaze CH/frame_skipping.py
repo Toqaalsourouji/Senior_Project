@@ -187,6 +187,10 @@ def main():
         writer = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"), 
                                cap.get(cv2.CAP_PROP_FPS) or 30, (width, height))
 
+    FRAME_SKIP = 15  # detect face once every N frames
+    tracker = None
+    frame_count = 0
+    last_bbox = None
     # Rest of your gaze tracking and blink detection code...
     while cap.isOpened():
         prev_time = time.time() #fps boi
@@ -195,87 +199,116 @@ def main():
         time_calculator(start_time, "Cam capture") #TIME END
         if not ret:
             break
+        frame_count += 1
+
         start_time = time.time() #TIME CALC
-        bboxes, _ = detector.detect(frame)
-        time_calculator(start_time, "detector") #TIME END
-        for bbox in bboxes:
-            start_time = time.time() #TIME CALC
-            x_min, y_min, x_max, y_max = map(int, bbox[:4])
-            face_img = frame[y_min:y_max, x_min:x_max]
-            
-            if face_img.size == 0:
-                continue
-            
-            pitch, yaw = engine.estimate(face_img)
-            time_calculator(start_time, "Gaze Inference") #TIME END
-            # Visualization and mouse control code...
-            start_time = time.time() #TIME CALC
-            draw_bbox_gaze(frame, bbox, pitch, yaw)
-            face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
-            gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0], 
-                                         face_center_x, face_center_y)
-            cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
-            time_calculator(start_time, "bbox draw") #TIME END
-            # Mouse control implementation...
-            start_time = time.time() #TIME CALC
-            frame_height, frame_width = frame.shape[:2]
-            frame_center_x = frame_width // 2
-            frame_center_y = frame_height // 2
-            deadzone_threshold = 0.5 * min(frame_width, frame_height) / 2
-            speed = 15 # old 35
-            dx = gaze_x - frame_center_x
-            dy = gaze_y - frame_center_y
-            time_calculator(start_time, "mouse ctrl calcluation") #TIME END
-
-            dx=-dx
-            start_time = time.time() #TIME CALC
-            if abs(dx) > deadzone_threshold or abs(dy) > deadzone_threshold:
-                dir_x = 1 if dx > 0 else -1 if dx < 0 else 0
-                dir_y = 1 if dy > 0 else -1 if dy < 0 else 0
-                
-                new_x, new_y = mouse.position  # current position
-                if abs(dx) > abs(dy):
-                    new_x += dir_x * speed
-                else:
-                    new_y += dir_y * speed
-
-                # Move mouse instantly
-                mouse.position = (new_x, new_y)
+        if tracker is None or frame_count % FRAME_SKIP == 0:
+           
+            # Detect face once every N frames
+            bboxes, _ = detector.detect(frame)
+            if len(bboxes) > 0:
+                last_bbox = bboxes[0]
+                # Initialize new tracker on this bbox
+                tracker = cv2.TrackerCSRT_create()
+                x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+                tracker.init(frame, (x_min, y_min, x_max - x_min, y_max - y_min))
             else:
-                cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                
-            time_calculator(start_time, "mouse move end") #TIME END
+                tracker = None
+        else:
+            # Update tracker for skipped frames
+            success, box = tracker.update(frame)
+            if success:
+                x, y, w, h = map(int, box)
+                last_bbox = (x, y, x + w, y + h)
+            else:
+                tracker = None  # force re-detection next frame
 
-            # BLINKING START
-            start_time = time.time() #TIME CALC
-            is_blinking = False
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = face_mesh.process(image_rgb)
-            if results.multi_face_landmarks:
-                face_landmarks = results.multi_face_landmarks[0]
-                h, w, _ = frame.shape
-                landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
-                left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
-                right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
-                avg_ear = (left_ear + right_ear) / 2.0
-    
-                if avg_ear < 0.2:
-                    blink_counter += 1
-                else:
-                    blink_counter = 0
-                    is_blinking = False
-    
-                if blink_counter >= BLINK_CONSEC_FRAMES:
-                    is_blinking = True
-                    print("BLINKING")
-                    mouse.click(Button.left, 1)
-            time_calculator(start_time, "Blinking") #TIME END
+        time_calculator(start_time, "detector")
+
+        if last_bbox is None:
+            cv2.imshow("Gaze Tracking", frame)
+            if cv2.waitKey(1) == ord('q'):
+                break
+            continue
+
+
+        start_time = time.time() #TIME CALC
+        x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+        face_img = frame[y_min:y_max, x_min:x_max]
+        
+        if face_img.size == 0:
+            continue
+        
+         # --- Gaze Estimation ---
+        start_time = time.time()
+        pitch, yaw = engine.estimate(face_img)
+        time_calculator(start_time, "Gaze Inference")
+
+        # --- Draw results ---
+        start_time = time.time()
+        draw_bbox_gaze(frame, last_bbox, pitch, yaw)
+        face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
+        gaze_x, gaze_y = project_to_2d(
+            pitch, yaw, frame.shape[1], frame.shape[0],
+            face_center_x, face_center_y
+        )
+        cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
+        time_calculator(start_time, "bbox draw")
+
+        # --- Mouse control ---
+        start_time = time.time()
+        frame_height, frame_width = frame.shape[:2]
+        frame_center_x = frame_width // 2
+        frame_center_y = frame_height // 2
+        deadzone_threshold = 0.5 * min(frame_width, frame_height) / 2
+        speed = 15
+        dx = gaze_x - frame_center_x
+        dy = gaze_y - frame_center_y
+
+        dx = -dx 
+        if abs(dx) > deadzone_threshold or abs(dy) > deadzone_threshold:
+            dir_x = 1 if dx > 0 else -1 if dx < 0 else 0
+            dir_y = 1 if dy > 0 else -1 if dy < 0 else 0
+            new_x, new_y = mouse.position
+            if abs(dx) > abs(dy):
+                new_x += dir_x * speed
+            else:
+                new_y += dir_y * speed
+            mouse.position = (new_x, new_y)
+        else:
+            cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+
+        time_calculator(start_time, "mouse move end")
+
+        # --- Blink detection ---
+        start_time = time.time()
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = face_mesh.process(image_rgb)
+        if results.multi_face_landmarks:
+            face_landmarks = results.multi_face_landmarks[0]
+            h, w, _ = frame.shape
+            landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
+            left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
+            right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
+            avg_ear = (left_ear + right_ear) / 2.0
+
+            if avg_ear < 0.2:
+                blink_counter += 1
+            else:
+                blink_counter = 0
+
+            if blink_counter >= BLINK_CONSEC_FRAMES:
+                print("BLINKING")
+                mouse.click(Button.left, 1)
+        time_calculator(start_time, "Blinking")
+
+        # --- Display frame ---
         if writer:
             writer.write(frame)
-            
-        cv2.imshow("Gaze Tracking", frame)
 
+
+        cv2.imshow("Gaze Tracking", frame)
         curr_time = time.time()
         fps = 1 / (curr_time - prev_time)
         prev_time = curr_time
@@ -283,7 +316,7 @@ def main():
 
         if cv2.waitKey(1) == ord('q'):
             break
-
+            
     cap.release()
     if writer:
         writer.release()
@@ -298,12 +331,11 @@ if __name__ == "__main__":
 
 # main()
 # pip install -r gaze-estimation-main/requirements.txt*/
-# python test_visual.py --source 0 --model mobileone_s0_gaze.onnx or model name
-# FPS 9
-
+# python frame_skipping.py --source 0 --model mobileone_s0_gaze.onnx or model name
+# FPS 14 AND 7, AVG IS 13.5
 #Cam capture: 5.98
-#Detector: 72.81
-#Gaze inference: 27.67 | 18
+#Detector: 72.81 | 100N | 40
+#Gaze inference: 27.67 | 15N
 #BBox draw: 1.00
 #Mouse ctrl calc: 0.00
 #Mouse move: 0.00
