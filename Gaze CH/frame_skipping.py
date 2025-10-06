@@ -208,8 +208,11 @@ def main():
             bboxes, _ = detector.detect(frame)
             if len(bboxes) > 0:
                 last_bbox = bboxes[0]
-                # Initialize new tracker on this bbox
-                tracker = cv2.TrackerCSRT_create()
+
+                # Use lightweight MOSSE tracker instead of CSRT
+                tracker = cv2.legacy.TrackerMOSSE_create()
+
+
                 x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
                 tracker.init(frame, (x_min, y_min, x_max - x_min, y_max - y_min))
             else:
@@ -274,7 +277,7 @@ def main():
                 new_x += dir_x * speed
             else:
                 new_y += dir_y * speed
-            mouse.position = (new_x, new_y)
+           # mouse.position = (new_x, new_y)
         else:
             cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
@@ -300,7 +303,7 @@ def main():
 
             if blink_counter >= BLINK_CONSEC_FRAMES:
                 print("BLINKING")
-                mouse.click(Button.left, 1)
+               # mouse.click(Button.left, 1)
         time_calculator(start_time, "Blinking")
 
         # --- Display frame ---
@@ -334,8 +337,8 @@ if __name__ == "__main__":
 # python frame_skipping.py --source 0 --model mobileone_s0_gaze.onnx or model name
 # FPS 14 AND 7, AVG IS 13.5
 #Cam capture: 5.98
-#Detector: 72.81 | 100N | 40
-#Gaze inference: 27.67 | 15N
+#Detector: 70
+#Gaze inference: 27.67 | 17N
 #BBox draw: 1.00
 #Mouse ctrl calc: 0.00
 #Mouse move: 0.00
