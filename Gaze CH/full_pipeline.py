@@ -8,12 +8,12 @@ import torch.nn.functional as F
 from torchvision import transforms
 import math
 import mediapipe as mp
-import pyautogui
+from pynput.mouse import Controller, Button
 import uniface
 from typing import Tuple
 import onnxruntime as ort
 import time 
-
+import tkinter as tk
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -28,7 +28,10 @@ SCROLL_AMOUNT = 250  # Amount to scroll on each blink action (POSTIVE for up, NE
 
 Frame = cv2.VideoCapture(1)
 
-
+def time_calculator(start_inf, label=""):
+    end_inf = time.time()
+    calc_time = end_inf - start_inf
+    print(f"{label} time: {calc_time*1000:.5f} ms")
 
 LEFT_EYE = [362, 385, 387, 263, 373, 380] # Right eye indices from MediaPipe using dlib library
 RIGHT_EYE = [33, 160, 158, 133, 153, 144] # Left eye indices from MediaPipe using dlib library
@@ -356,7 +359,11 @@ def run_calibration(cap, engine, detector):
     calibration_gaze = []
     calibration_screen = []
     
-    swidth, sheight = pyautogui.size()
+    root = tk.Tk()
+    root.withdraw()  # hide the window
+    swidth = root.winfo_screenwidth()
+    sheight = root.winfo_screenheight()
+    root.destroy()
     print("\n" + "="*80)
     print("CALIBRATION STARTING")
     print("="*80)
@@ -657,28 +664,34 @@ def main():
     if response.lower() != 'y':
         return
     """
-    
+    mouse = Controller()
     # Main tracking loop
     while cap.isOpened():
+        start_time = time.time() #TIME CALC
         ret, frame = cap.read()
+        time_calculator(start_time, "Cam capture") #TIME END
         if not ret:
             break
         
         frame_count += 1
         fps_counter.update()
-        
+        start_time = time.time() #TIME CALC
         bboxes, _ = detector.detect(frame)
-        
+        time_calculator(start_time, "Face detect") #TIME END
         for bbox in bboxes:
+            start_time = time.time() #TIME CALC
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
             face_img = frame[y_min:y_max, x_min:x_max]
             
+
             if face_img.size == 0:
                 continue
-            
+            time_calculator(start_time, "Extract Face data") #TIME END
+            start_time = time.time() #TIME CALC
             pitch, yaw = engine.estimate(face_img)
-            
+            time_calculator(start_time, "Gaze estimation") #TIME END
             # Visualization
+            start_time = time.time() #TIME CALC
             draw_bbox_gaze(frame, bbox, pitch, yaw)
             face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
             
@@ -689,8 +702,10 @@ def main():
                                          face_center_x, face_center_y)
             
             cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
-            
+            time_calculator(start_time, "Predit with cali or not idk") #TIME END
+
             # Mouse control
+            start_time = time.time() #TIME CALC
             frame_height, frame_width = frame.shape[:2]
             frame_center_x = frame_width // 2
             frame_center_y = frame_height // 2
@@ -700,14 +715,17 @@ def main():
             dx = gaze_x - frame_center_x
             dy = gaze_y - frame_center_y
             norm = math.hypot(dx, dy)
-            
+            time_calculator(start_time, "Math stuff") #TIME END
+            start_time = time.time() #TIME CALC
             if norm > deadzone_threshold:
                 move_x = int(speed * dx / norm)
                 move_y = int(speed * dy / norm)
-                pyautogui.moveRel(move_x, move_y, duration=0.01)
+                mouse.move(move_x, move_y)
             
             # Blink detection
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            time_calculator(start_time, "Moving mouse") #TIME END
+            start_time = time.time() #TIME CALC
             results = face_mesh.process(image_rgb)
             
             if results.multi_face_landmarks:
@@ -742,24 +760,28 @@ def main():
                 now = now_ms()
                 if now - last_blink_ms >= ACTION_COOLDOWN_MS:
                     if both_blink_frames >= 2:
-                        pyautogui.click()
+                        mouse.click(Button.left, 1)
                         last_blink_ms = now
                         both_blink_frames = 0
+
                     elif right_blink_frames >= 2:
-                        pyautogui.rightClick()
+                        mouse.click(Button.right, 1)
                         last_blink_ms = now
                         right_blink_frames = 0
+
                     elif left_blink_frames >= 2:
                         direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
                         if direction == "UP":
-                            pyautogui.scroll(SCROLL_AMOUNT)
+                            # Positive scroll value → scroll up
+                            mouse.scroll(0, SCROLL_AMOUNT)
                         elif direction == "DOWN":
-                            pyautogui.scroll(-SCROLL_AMOUNT)
+                            # Negative scroll value → scroll down
+                            mouse.scroll(0, -SCROLL_AMOUNT)
                         last_blink_ms = now
                         left_blink_frames = 0
-        
+            time_calculator(start_time, "Blinking stuff") #TIME END
         # Display FPS and info on frame
-        fps = fps_counter.get_fps()
+        fps = fps_counter.get_fps()  
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(frame, f"Frame: {frame_count}", (10, 70), 
@@ -798,4 +820,4 @@ def main():
 if __name__ == "__main__":
     main()
 # pip install -r reqs.txt*/
-# python test2.py --source 0 --model mobileone_s0_gaze.onnx
+# python full_pipeline.py --source 0 --model best_model.onnx
