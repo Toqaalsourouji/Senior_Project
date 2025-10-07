@@ -277,7 +277,7 @@ def main():
                 new_x += dir_x * speed
             else:
                 new_y += dir_y * speed
-           # mouse.position = (new_x, new_y)
+            mouse.position = (new_x, new_y)
         else:
             cv2.putText(frame, "DEADZONE", (frame.shape[1] - 200, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
@@ -335,7 +335,7 @@ if __name__ == "__main__":
 # main()
 # pip install -r gaze-estimation-main/requirements.txt*/
 # python frame_skipping.py --source 0 --model mobileone_s0_gaze.onnx or model name
-# FPS 14 AND 7, AVG IS 13.5
+# FPS 14 AND 7, AVG IS 13.5 || WOW 32FPS NEW and 10 FPS
 #Cam capture: 5.98
 #Detector: 70
 #Gaze inference: 27.67 | 17N
@@ -343,3 +343,22 @@ if __name__ == "__main__":
 #Mouse ctrl calc: 0.00
 #Mouse move: 0.00
 #Blinking: 6.98
+
+
+#WITH DETECTOR GET
+#Cam capture time: 7.97892 ms
+#detector time: 72.80517 ms
+#Gaze Inference time: 16.95490 ms
+#bbox draw time: 0.00000 ms
+#mouse move end time: 0.00000 ms
+#Blinking time: 5.98216 ms
+#FPS: 9.46
+
+#WITHOUT DETECTOR GET
+#Cam capture time: 7.97749 ms
+#detector time: 0.99826 ms
+#Gaze Inference time: 16.97326 ms
+#bbox draw time: 0.00000 ms
+#mouse move end time: 0.00000 ms
+#Blinking time: 6.98137 ms
+#FPS: 27.84
