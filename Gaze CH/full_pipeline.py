@@ -586,28 +586,27 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
         np.clip(gaze_x, 0, width-1),
         np.clip(gaze_y, 0, height-1)
     )
-
 def main():
     args = parse_args()
-    
-    print("\n" + "="*80)
+
+    print("\n" + "=" * 80)
     print("GAZE TRACKING SYSTEM")
-    print("="*80)
-    
+    print("=" * 80)
+
     left_blink_frames = 0
     right_blink_frames = 0
     both_blink_frames = 0
-    last_blink_ms = 0 
-    
+    last_blink_ms = 0
+
     # Initialize components
     print("\nInitializing model...")
     engine = GazeEstimationTorch(args.model)
     print("✓ Model loaded")
-    
+
     print("Initializing face detector...")
     detector = uniface.RetinaFace()
     print("✓ Face detector loaded")
-    
+
     # Open camera
     print(f"\nOpening camera {args.source}...")
     cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
@@ -615,20 +614,20 @@ def main():
         print("[ERROR] Could not open video source")
         print("Try: --source 0, --source 1, or --source 2")
         return
-    
+
     # Set camera properties for better performance
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
-    
+
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
     print(f"✓ Camera opened: {actual_width}x{actual_height} @ {actual_fps}fps")
-    
-    # Run calibration
+
+    # Run calibration (this will read frames itself)
     coeffs = run_calibration(cap, engine, detector)
-    
+
     # Initialize face mesh
     print("\nInitializing face mesh...")
     face_mesh = mp.solutions.face_mesh.FaceMesh(
@@ -639,107 +638,163 @@ def main():
         min_tracking_confidence=0.5
     )
     print("✓ Face mesh loaded")
-    
+
     # Initialize FPS counter
     fps_counter = FPSCounter()
-    
+
     # Video writer setup
     writer = None
     if args.output:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        writer = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"), 
-                               cap.get(cv2.CAP_PROP_FPS) or 30, (width, height))
-    
-    print("\n" + "="*80)
-    print("TRACKING STARTED - Press 'q' to quit")
-    print("="*80 + "\n")
-    
-    frame_count = 0
-    # Run profiling
-    """print("\nRunning performance analysis...")
-    profile_pipeline(cap, engine, detector, face_mesh, num_frames=30)
-    
-    response = input("\nContinue with tracking? (y/n): ")
-    if response.lower() != 'y':
-        return
-    """
-    mouse = Controller()
-    # Main tracking loop
-    while cap.isOpened():
-        start_time = time.time() #TIME CALC
-        ret, frame = cap.read()
-        time_calculator(start_time, "Cam capture") #TIME END
-        if not ret:
-            break
-        
-        frame_count += 1
-        fps_counter.update()
-        start_time = time.time() #TIME CALC
-        bboxes, _ = detector.detect(frame)
-        time_calculator(start_time, "Face detect") #TIME END
-        for bbox in bboxes:
-            start_time = time.time() #TIME CALC
-            x_min, y_min, x_max, y_max = map(int, bbox[:4])
-            face_img = frame[y_min:y_max, x_min:x_max]
-            
+        writer = cv2.VideoWriter(
+            args.output,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            cap.get(cv2.CAP_PROP_FPS) or 30,
+            (width, height)
+        )
 
-            if face_img.size == 0:
+    print("\n" + "=" * 80)
+    print("TRACKING STARTED - Press 'q' to quit")
+    print("=" * 80 + "\n")
+
+    # Frame-skipping / tracker settings (persist across frames)
+    FRAME_SKIP = 15  # detect face once every N frames (tune this)
+    tracker = None
+    frame_count = 0
+    last_bbox = None
+
+    mouse = Controller()
+
+    try:
+        while cap.isOpened():
+            # Capture frame
+            start_time = time.time()
+            ret, frame = cap.read()
+            time_calculator(start_time, "Cam capture")
+            if not ret:
+                break
+
+            frame_count += 1
+            fps_counter.update()
+
+            # Face detection / tracker update
+            start_time = time.time()
+            if tracker is None or (FRAME_SKIP > 0 and frame_count % FRAME_SKIP == 0):
+                # Detect
+                bboxes, _ = detector.detect(frame)
+                time_calculator(start_time, "Face detect")
+
+                if len(bboxes) > 0:
+                    last_bbox = bboxes[0]
+                    x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+
+                    # Init MOSSE tracker (lightweight)
+                    try:
+                        tracker = cv2.legacy.TrackerMOSSE_create()
+                    except AttributeError:
+                        # Fallback if legacy API not available
+                        tracker = cv2.TrackerMOSSE_create()
+                    tracker.init(frame, (x_min, y_min, x_max - x_min, y_max - y_min))
+                else:
+                    tracker = None
+            else:
+                # Update tracker for skipped frames
+                success, box = tracker.update(frame)
+                if success:
+                    x, y, w, h = map(int, box)
+                    last_bbox = (x, y, x + w, y + h)
+                else:
+                    tracker = None  # force re-detection next iteration
+                time_calculator(start_time, "Tracker update")
+
+            # If no face found or tracked, show frame and continue
+            if last_bbox is None:
+                # Optional: still run blink detection on full frame? (currently not)
+                cv2.imshow("Gaze Tracking", frame)
+                if cv2.waitKey(1) == ord('q'):
+                    break
                 continue
-            time_calculator(start_time, "Extract Face data") #TIME END
-            start_time = time.time() #TIME CALC
+
+            # --- Extract face ROI ---
+            start_time = time.time()
+            x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+
+            # clamp bbox to image bounds to avoid empty crops
+            x_min = max(0, min(x_min, frame.shape[1] - 1))
+            x_max = max(0, min(x_max, frame.shape[1] - 1))
+            y_min = max(0, min(y_min, frame.shape[0] - 1))
+            y_max = max(0, min(y_max, frame.shape[0] - 1))
+
+            face_img = frame[y_min:y_max, x_min:x_max]
+            if face_img.size == 0:
+                # If extraction failed, force re-detect next frame
+                tracker = None
+                last_bbox = None
+                continue
+            time_calculator(start_time, "Extract Face data")
+
+            # --- Gaze estimation ---
+            start_time = time.time()
             pitch, yaw = engine.estimate(face_img)
-            time_calculator(start_time, "Gaze estimation") #TIME END
-            # Visualization
-            start_time = time.time() #TIME CALC
-            draw_bbox_gaze(frame, bbox, pitch, yaw)
-            face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
-            
+            time_calculator(start_time, "Gaze estimation")
+
+            # --- Draw results ---
+            start_time = time.time()
+            draw_bbox_gaze(frame, last_bbox, pitch, yaw)
+            time_calculator(start_time, "Draw gaze")
+
+            # Compute gaze point (with calibration if available)
+            face_center_x = (x_min + x_max) // 2
+            face_center_y = (y_min + y_max) // 2
+            start_time = time.time()
             if coeffs is not None:
                 gaze_x, gaze_y = predict_with_calibration(pitch, yaw, coeffs)
             else:
-                gaze_x, gaze_y = project_to_2d(pitch, yaw, frame.shape[1], frame.shape[0], 
-                                         face_center_x, face_center_y)
-            
+                gaze_x, gaze_y = project_to_2d(
+                    pitch, yaw, frame.shape[1], frame.shape[0],
+                    face_center_x, face_center_y
+                )
             cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
-            time_calculator(start_time, "Predit with cali or not idk") #TIME END
+            time_calculator(start_time, "Predict with cali or not")
 
-            # Mouse control
-            start_time = time.time() #TIME CALC
+            # --- Mouse control ---
+            start_time = time.time()
             frame_height, frame_width = frame.shape[:2]
             frame_center_x = frame_width // 2
             frame_center_y = frame_height // 2
             deadzone_threshold = 0.3 * min(frame_width, frame_height) / 2
             speed = 15
-            
+
             dx = gaze_x - frame_center_x
             dy = gaze_y - frame_center_y
             norm = math.hypot(dx, dy)
-            time_calculator(start_time, "Math stuff") #TIME END
-            start_time = time.time() #TIME CALC
+            time_calculator(start_time, "Math stuff")
+
+            start_time = time.time()
             if norm > deadzone_threshold:
                 move_x = int(speed * dx / norm)
                 move_y = int(speed * dy / norm)
                 mouse.move(move_x, move_y)
-            
-            # Blink detection
+            time_calculator(start_time, "Moving mouse")
+
+            # --- Blink detection via face_mesh ---
+            start_time = time.time()
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            time_calculator(start_time, "Moving mouse") #TIME END
-            start_time = time.time() #TIME CALC
             results = face_mesh.process(image_rgb)
-            
+
             if results.multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
                 h, w, _ = frame.shape
                 landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
                 left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
                 right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
-                
+
                 left_closed = left_ear < EAR_CLOSE_THRESHOLD
                 right_closed = right_ear < EAR_CLOSE_THRESHOLD
                 left_open = left_ear > EAR_OPEN_THRESHOLD
                 right_open = right_ear > EAR_OPEN_THRESHOLD
-                
+
                 if left_closed and right_closed:
                     both_blink_frames += 1
                     left_blink_frames = 0
@@ -756,66 +811,63 @@ def main():
                     left_blink_frames = 0
                     right_blink_frames = 0
                     both_blink_frames = 0
-                
+
                 now = now_ms()
                 if now - last_blink_ms >= ACTION_COOLDOWN_MS:
                     if both_blink_frames >= 2:
                         mouse.click(Button.left, 1)
                         last_blink_ms = now
                         both_blink_frames = 0
-
                     elif right_blink_frames >= 2:
                         mouse.click(Button.right, 1)
                         last_blink_ms = now
                         right_blink_frames = 0
-
                     elif left_blink_frames >= 2:
                         direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
                         if direction == "UP":
-                            # Positive scroll value → scroll up
                             mouse.scroll(0, SCROLL_AMOUNT)
                         elif direction == "DOWN":
-                            # Negative scroll value → scroll down
                             mouse.scroll(0, -SCROLL_AMOUNT)
                         last_blink_ms = now
                         left_blink_frames = 0
-            time_calculator(start_time, "Blinking stuff") #TIME END
-        # Display FPS and info on frame
-        fps = fps_counter.get_fps()  
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Frame: {frame_count}", (10, 70), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Show calibration status
-        if coeffs is not None:
-            cv2.putText(frame, "Calibrated", (10, 110), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "No Calibration", (10, 110), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
+            time_calculator(start_time, "Blinking stuff")
+
+            # Display FPS and info on frame
+            fps = fps_counter.get_fps()
+            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"Frame: {frame_count}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            if coeffs is not None:
+                cv2.putText(frame, "Calibrated", (10, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            else:
+                cv2.putText(frame, "No Calibration", (10, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            if writer:
+                writer.write(frame)
+
+            cv2.imshow("Gaze Tracking", frame)
+
+            key = cv2.waitKey(1)
+            if key == ord('q'):
+                break
+            elif key == ord('c'):  # Press 'c' to recalibrate
+                print("\nRecalibrating...")
+                coeffs = run_calibration(cap, engine, detector)
+
+    finally:
+        # Cleanup
+        print(f"\n\nShutting down...")
+        print(f"Total frames processed: {frame_count}")
+        print(f"Average FPS: {fps_counter.get_fps():.1f}")
+
+        cap.release()
         if writer:
-            writer.write(frame)
-        
-        cv2.imshow("Gaze Tracking", frame)
-        
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-            break
-        elif key == ord('c'):  # Press 'c' to recalibrate
-            print("\nRecalibrating...")
-            coeffs = run_calibration(cap, engine, detector)
-    
-    # Cleanup
-    print(f"\n\nShutting down...")
-    print(f"Total frames processed: {frame_count}")
-    print(f"Average FPS: {fps_counter.get_fps():.1f}")
-    
-    cap.release()
-    if writer:
-        writer.release()
-    cv2.destroyAllWindows()
+            writer.release()
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
