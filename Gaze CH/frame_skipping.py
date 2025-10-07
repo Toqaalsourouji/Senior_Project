@@ -337,7 +337,7 @@ if __name__ == "__main__":
 # python frame_skipping.py --source 0 --model mobileone_s0_gaze.onnx or model name
 # FPS 14 AND 7, AVG IS 13.5 || WOW 32FPS NEW and 10 FPS
 #Cam capture: 5.98
-#Detector: 70
+#Detector: 70 | 40N
 #Gaze inference: 27.67 | 17N
 #BBox draw: 1.00
 #Mouse ctrl calc: 0.00
