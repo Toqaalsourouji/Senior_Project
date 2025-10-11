@@ -1,0 +1,39 @@
+/home/pi/Senior_Project/Gaze CH/RBPCC_v3_w_Scrolling.py
+/home/pi/Senior_Project/Gaze CH/mobileone_s0_gaze.onnx 
+
+cd "/home/pi/Senior_Project/Gaze CH"
+python3 RBPCC_v3_w_Scrolling.py --source 0 --model mobileone_s0_gaze.onnx --no-display
+
+
+//create a service file 
+sudo nano /etc/systemd/system/gaze.service
+//inside the file 
+[Unit]
+Description=Gaze Tracker Autostart Service
+After=network-online.target multi-user.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/Senior_Project/Gaze CH
+ExecStart=/usr/bin/python3 /home/pi/Senior_Project/Gaze\ CH/RBPCC_v3_w_Scrolling.py --source 0 --model /home/pi/Senior_Project/Gaze\ CH/mobileone_s0_gaze.onnx --no-display
+Restart=on-failure
+Environment="PYTHONUNBUFFERED=1"
+StandardOutput=append:/home/pi/gaze_log.txt
+StandardError=append:/home/pi/gaze_error.txt
+
+[Install]
+WantedBy=multi-user.target
+
+//then reload daemon
+sudo systemctl daemon-reload
+sudo systemctl enable gaze.service
+sudo systemctl start gaze.service
+
+//any logs will be saved in 
+journalctl -u gaze.service -f
+
+//incase of error we can stop the whole service
+sudo systemctl stop gaze.service
+
+
