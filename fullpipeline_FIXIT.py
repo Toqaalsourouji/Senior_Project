@@ -796,9 +796,20 @@ def main():
                 # Clamp to screen bounds
                 screen_x = np.clip(screen_x, 0, screen_width - 1)
                 screen_y = np.clip(screen_y, 0, screen_height - 1)
-                
+                gaze_x, gaze_y = project_to_2d(
+                    pitch, yaw, frame.shape[1], frame.shape[0], 
+                    face_center_x, face_center_y
+                )
                 # Move cursor to ABSOLUTE screen position
-                mouse.position = (screen_x, screen_y)
+                frame_center_x = frame.shape[1] // 2
+                frame_center_y = frame.shape[0] // 2
+                speed = 20  # pixels per frame
+                dx = gaze_x - frame_center_x
+                dy = gaze_y - frame_center_y
+                norm = math.hypot(dx, dy)
+                move_x = int(speed * dx / norm)
+                move_y = int(speed * dy / norm)
+                mouse.move(move_x, move_y)
                 
                 # For visualization on frame, project screen coords to frame coords
                 frame_x = int(screen_x * frame.shape[1] / screen_width)
@@ -931,4 +942,4 @@ def main():
 if __name__ == "__main__":
     main()
 # pip install -r reqs.txt*/
-# python full_pipeline.py --source 0 --model best_model.onnx
+# python  fullpipeline_FIXIT.py --source 0 --model best_model.onnx
