@@ -3,9 +3,6 @@ import logging
 import argparse 
 import warnings
 import numpy as np
-import torch
-import torch.nn.functional as F
-from torchvision import transforms
 import math
 import mediapipe as mp
 from pynput.mouse import Controller, Button
@@ -765,9 +762,9 @@ def main():
         start_time = time.time() #TIME CALC
         bboxes, _ = detector.detect(frame)
         time_calculator(start_time, "Face detect") #TIME END
-        bboxes, _ = detector.detect(frame)
         
         for bbox in bboxes:
+            start_time = time.time() 
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
             face_img = frame[y_min:y_max, x_min:x_max]
             
@@ -777,13 +774,12 @@ def main():
             # Extract eye region for model
             eye_region = extract_eye_region_simple(face_img)
             normalized = normalize_for_mpiigaze(eye_region)
-            
             # Get gaze estimation
             pitch, yaw = engine.estimate(face_img, use_eye_extraction=True)
-            
+            time_calculator(start_time, "Inference Time") #TIME END
             # CRITICAL: Get gaze estimation
             # pitch, yaw = engine.estimate(face_img)
-            
+            start_time = time.time() #TIME CALC
             # Visualization on video frame
             draw_bbox_gaze(frame, bbox, pitch, yaw)
             face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
@@ -843,11 +839,12 @@ def main():
                     
                     # RELATIVE movement
                     mouse.move(move_x, move_y)
-            
-            # Blink detection
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             time_calculator(start_time, "Moving mouse") #TIME END
             start_time = time.time() #TIME CALC
+            # Blink detection
+            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            
             results = face_mesh.process(image_rgb)
             
             if results.multi_face_landmarks:
@@ -901,7 +898,7 @@ def main():
                             #mouse.scroll(0, -SCROLL_AMOUNT)
                         last_blink_ms = now
                         left_blink_frames = 0
-            time_calculator(start_time, "Blinking stuff") #TIME END
+            time_calculator(start_time, "Blinking ") #TIME END
         # Display FPS and info on frame
         fps = fps_counter.get_fps()  
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
