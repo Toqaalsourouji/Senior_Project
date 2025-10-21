@@ -3,9 +3,6 @@ import logging
 import argparse 
 import warnings
 import numpy as np
-import torch
-import torch.nn.functional as F
-from torchvision import transforms
 import math
 import mediapipe as mp
 from pynput.mouse import Controller, Button
@@ -194,77 +191,6 @@ calibration_points =[
 ]
 
 
-def extract_eyes_with_mediapipe(frame, face_landmarks, face_bbox):
-    """
-    Extract eye regions using MediaPipe landmarks.
-    """
-    h, w, _ = frame.shape
-    x_min, y_min, x_max, y_max = map(int, face_bbox[:4])
-    
-    # MediaPipe eye landmark indices
-    LEFT_EYE_INDICES = [33, 133, 160, 159, 158, 157, 173, 155, 154, 153, 145, 144, 163, 7]
-    RIGHT_EYE_INDICES = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385]
-    
-    # Get landmarks
-    landmarks = face_landmarks.landmark
-    
-    # Get bounding box for both eyes
-    left_eye_points = [(int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in LEFT_EYE_INDICES]
-    right_eye_points = [(int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in RIGHT_EYE_INDICES]
-    
-    all_eye_points = left_eye_points + right_eye_points
-    
-    # Find bounding box around both eyes
-    xs = [p[0] for p in all_eye_points]
-    ys = [p[1] for p in all_eye_points]
-    
-    eye_x_min = max(0, min(xs) - 20)
-    eye_x_max = min(w, max(xs) + 20)
-    eye_y_min = max(0, min(ys) - 20)
-    eye_y_max = min(h, max(ys) + 20)
-    
-    # Extract eye region
-    eye_region = frame[eye_y_min:eye_y_max, eye_x_min:eye_x_max]
-    
-    return eye_region
-
-def extract_eye_region_simple(face_img):
-    """
-    Extract eye region from face image.
-    Simple version without landmarks.
-    """
-    h, w = face_img.shape[:2]
-    
-    # Eye region is typically in upper-middle 40% of face
-    eye_y_start = int(h * 0.25)
-    eye_y_end = int(h * 0.55)
-    eye_x_start = int(w * 0.15)
-    eye_x_end = int(w * 0.85)
-    
-    eye_region = face_img[eye_y_start:eye_y_end, eye_x_start:eye_x_end]
-    
-    if eye_region.size == 0:
-        return face_img  # Fallback to full face
-    
-    return eye_region
-
-def normalize_for_mpiigaze(image):
-    """
-    Normalize to match MPIIGaze training data.
-    """
-    # Convert to grayscale
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
-    
-    # Histogram equalization
-    equalized = cv2.equalizeHist(gray)
-    
-    # Convert back to BGR for model
-    bgr = cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR)
-    
-    return bgr
 
 def draw_gaze(frame, bbox, pitch, yaw, thickness=2, color=(0, 0, 255)):
     """Draws gaze direction on a frame given bounding box and gaze angles."""
@@ -349,12 +275,12 @@ def parse_args():
 
 class GazeEstimationTorch:
     def __init__(self, model_path: str):
-        self.input_size = (224, 224)
+        self.input_size = (448, 448)
         self.input_mean = [0.485, 0.456, 0.406]
         self.input_std = [0.229, 0.224, 0.225]
-        self._bins = 28
-        self._binwidth = 3.0
-        self._angle_offset = 42.0
+        self._bins = 90
+        self._binwidth = 4
+        self._angle_offset = 180
         self.idx_tensor = np.arange(self._bins, dtype=np.float32)
 
         # CRITICAL: Use GPU if available
@@ -398,26 +324,15 @@ class GazeEstimationTorch:
         
         return img
 
-    def estimate(self, face_image: np.ndarray, use_eye_extraction=True) -> Tuple[float, float]:
-        """
-        Estimate gaze with optional eye extraction.
-        """
-        if use_eye_extraction:
-            # Extract eye region
-            eye_region = extract_eye_region_simple(face_image)
-            # Normalize
-            processed = normalize_for_mpiigaze(eye_region)
-        else:
-            processed = face_image
-        
-        # Preprocess for model
-        input_tensor = self.preprocess_fast(processed)
+    def estimate(self, face_image: np.ndarray) -> Tuple[float, float]:
+        # Use fast preprocessing
+        input_tensor = self.preprocess_fast(face_image)
         
         # ONNX inference
         outputs = self.session.run(None, {self.input_name: input_tensor})
         pitch, yaw = outputs
         
-        # Softmax
+        # Softmax (numpy is faster than torch here)
         pitch_exp = np.exp(pitch - np.max(pitch, axis=1, keepdims=True))
         pitch = pitch_exp / np.sum(pitch_exp, axis=1, keepdims=True)
         
@@ -668,28 +583,27 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
         np.clip(gaze_x, 0, width-1),
         np.clip(gaze_y, 0, height-1)
     )
-
 def main():
     args = parse_args()
-    
-    print("\n" + "="*80)
+
+    print("\n" + "=" * 80)
     print("GAZE TRACKING SYSTEM")
-    print("="*80)
-    
+    print("=" * 80)
+
     left_blink_frames = 0
     right_blink_frames = 0
     both_blink_frames = 0
-    last_blink_ms = 0 
-    
+    last_blink_ms = 0
+
     # Initialize components
     print("\nInitializing model...")
     engine = GazeEstimationTorch(args.model)
     print("✓ Model loaded")
-    
+
     print("Initializing face detector...")
     detector = uniface.RetinaFace()
     print("✓ Face detector loaded")
-    
+
     # Open camera
     print(f"\nOpening camera {args.source}...")
     cap = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
@@ -697,20 +611,20 @@ def main():
         print("[ERROR] Could not open video source")
         print("Try: --source 0, --source 1, or --source 2")
         return
-    
+
     # Set camera properties for better performance
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
-    
+
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
     print(f"✓ Camera opened: {actual_width}x{actual_height} @ {actual_fps}fps")
-    
-    # Run calibration
+
+    # Run calibration (this will read frames itself)
     coeffs = run_calibration(cap, engine, detector)
-    
+
     # Initialize face mesh
     print("\nInitializing face mesh...")
     face_mesh = mp.solutions.face_mesh.FaceMesh(
@@ -721,147 +635,163 @@ def main():
         min_tracking_confidence=0.5
     )
     print("✓ Face mesh loaded")
-    
+
     # Initialize FPS counter
     fps_counter = FPSCounter()
-    
+
     # Video writer setup
     writer = None
     if args.output:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        writer = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"), 
-                               cap.get(cv2.CAP_PROP_FPS) or 30, (width, height))
-    
-    print("\n" + "="*80)
+        writer = cv2.VideoWriter(
+            args.output,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            cap.get(cv2.CAP_PROP_FPS) or 30,
+            (width, height)
+        )
+
+    print("\n" + "=" * 80)
     print("TRACKING STARTED - Press 'q' to quit")
-    print("="*80 + "\n")
-    
+    print("=" * 80 + "\n")
+
+    # Frame-skipping / tracker settings (persist across frames)
+    FRAME_SKIP = 15  # detect face once every N frames (tune this)
+    tracker = None
     frame_count = 0
-    # Run profiling
-    """print("\nRunning performance analysis...")
-    profile_pipeline(cap, engine, detector, face_mesh, num_frames=30)
-    
-    response = input("\nContinue with tracking? (y/n): ")
-    if response.lower() != 'y':
-        return
-    """
+    last_bbox = None
+
     mouse = Controller()
-    root = tk.Tk() #get screen size
-    root.withdraw() #hide the window
-    screen_width = root.winfo_screenwidth() #get screen size
-    screen_height = root.winfo_screenheight() #get screen size
-    root.destroy()    
-    # Main tracking loop
-    while cap.isOpened():
-        start_time = time.time() #TIME CALC
-        ret, frame = cap.read()
-        time_calculator(start_time, "Cam capture") #TIME END
-        if not ret:
-            break
-        
-        frame_count += 1
-        fps_counter.update()
-        start_time = time.time() #TIME CALC
-        bboxes, _ = detector.detect(frame)
-        time_calculator(start_time, "Face detect") #TIME END
-        bboxes, _ = detector.detect(frame)
-        
-        for bbox in bboxes:
-            x_min, y_min, x_max, y_max = map(int, bbox[:4])
-            face_img = frame[y_min:y_max, x_min:x_max]
-            
-            if face_img.size == 0:
+
+    try:
+        while cap.isOpened():
+            # Capture frame
+            start_time = time.time()
+            ret, frame = cap.read()
+            time_calculator(start_time, "Cam capture")
+            if not ret:
+                break
+
+            frame_count += 1
+            fps_counter.update()
+
+            # Face detection / tracker update
+            start_time = time.time()
+            if tracker is None or (FRAME_SKIP > 0 and frame_count % FRAME_SKIP == 0):
+                # Detect
+                bboxes, _ = detector.detect(frame)
+                time_calculator(start_time, "Face detect")
+
+                if len(bboxes) > 0:
+                    last_bbox = bboxes[0]
+                    x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+
+                    # Init MOSSE tracker (lightweight)
+                    try:
+                        tracker = cv2.legacy.TrackerMOSSE_create()
+                    except AttributeError:
+                        # Fallback if legacy API not available
+                        tracker = cv2.TrackerMOSSE_create()
+                    tracker.init(frame, (x_min, y_min, x_max - x_min, y_max - y_min))
+                else:
+                    tracker = None
+            else:
+                # Update tracker for skipped frames
+                success, box = tracker.update(frame)
+                if success:
+                    x, y, w, h = map(int, box)
+                    last_bbox = (x, y, x + w, y + h)
+                else:
+                    tracker = None  # force re-detection next iteration
+                time_calculator(start_time, "Tracker update")
+
+            # If no face found or tracked, show frame and continue
+            if last_bbox is None:
+                # Optional: still run blink detection on full frame? (currently not)
+                cv2.imshow("Gaze Tracking", frame)
+                if cv2.waitKey(1) == ord('q'):
+                    break
                 continue
-            
-            # Extract eye region for model
-            eye_region = extract_eye_region_simple(face_img)
-            normalized = normalize_for_mpiigaze(eye_region)
-            
-            # Get gaze estimation
-            pitch, yaw = engine.estimate(face_img, use_eye_extraction=True)
-            
-            # CRITICAL: Get gaze estimation
+
+            # --- Extract face ROI ---
+            start_time = time.time()
+            x_min, y_min, x_max, y_max = map(int, last_bbox[:4])
+
+            # clamp bbox to image bounds to avoid empty crops
+            x_min = max(0, min(x_min, frame.shape[1] - 1))
+            x_max = max(0, min(x_max, frame.shape[1] - 1))
+            y_min = max(0, min(y_min, frame.shape[0] - 1))
+            y_max = max(0, min(y_max, frame.shape[0] - 1))
+
+            face_img = frame[y_min:y_max, x_min:x_max]
+            if face_img.size == 0:
+                # If extraction failed, force re-detect next frame
+                tracker = None
+                last_bbox = None
+                continue
+            time_calculator(start_time, "Extract Face data")
+
+            # --- Gaze estimation ---
+            start_time = time.time()
             pitch, yaw = engine.estimate(face_img)
-            
-            # Visualization on video frame
-            draw_bbox_gaze(frame, bbox, pitch, yaw)
-            face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
-            
-            # OPTION 1: If calibrated, map directly to screen coordinates
+            time_calculator(start_time, "Gaze estimation")
+
+            # --- Draw results ---
+            start_time = time.time()
+            draw_bbox_gaze(frame, last_bbox, pitch, yaw)
+            time_calculator(start_time, "Draw gaze")
+
+            # Compute gaze point (with calibration if available)
+            face_center_x = (x_min + x_max) // 2
+            face_center_y = (y_min + y_max) // 2
+            start_time = time.time()
             if coeffs is not None:
-                # This gives SCREEN coordinates (0 to screen_width, 0 to screen_height)
-                screen_x, screen_y = predict_with_calibration(pitch, yaw, coeffs)
-                
-                # Clamp to screen bounds
-                screen_x = np.clip(screen_x, 0, screen_width - 1)
-                screen_y = np.clip(screen_y, 0, screen_height - 1)
+                gaze_x, gaze_y = predict_with_calibration(pitch, yaw, coeffs)
+            else:
                 gaze_x, gaze_y = project_to_2d(
-                    pitch, yaw, frame.shape[1], frame.shape[0], 
+                    pitch, yaw, frame.shape[1], frame.shape[0],
                     face_center_x, face_center_y
                 )
-                # Move cursor to ABSOLUTE screen position
-                frame_center_x = frame.shape[1] // 2
-                frame_center_y = frame.shape[0] // 2
-                speed = 20  # pixels per frame
-                dx = gaze_x - frame_center_x
-                dy = gaze_y - frame_center_y
-                norm = math.hypot(dx, dy)
+            cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
+            time_calculator(start_time, "Predict with cali or not")
+
+            # --- Mouse control ---
+            start_time = time.time()
+            frame_height, frame_width = frame.shape[:2]
+            frame_center_x = frame_width // 2
+            frame_center_y = frame_height // 2
+            deadzone_threshold = 0.3 * min(frame_width, frame_height) / 2
+            speed = 15
+
+            dx = gaze_x - frame_center_x
+            dy = gaze_y - frame_center_y
+            norm = math.hypot(dx, dy)
+            time_calculator(start_time, "Math stuff")
+
+            start_time = time.time()
+            if norm > deadzone_threshold:
                 move_x = int(speed * dx / norm)
                 move_y = int(speed * dy / norm)
                 mouse.move(move_x, move_y)
-                
-                # For visualization on frame, project screen coords to frame coords
-                frame_x = int(screen_x * frame.shape[1] / screen_width)
-                frame_y = int(screen_y * frame.shape[0] / screen_height)
-                cv2.circle(frame, (frame_x, frame_y), 10, (0, 0, 255), -1)
-            
-            # OPTION 2: If not calibrated, use relative movement with deadzone
-            else:
-                # Project gaze to frame coordinates
-                gaze_x, gaze_y = project_to_2d(
-                    pitch, yaw, frame.shape[1], frame.shape[0], 
-                    face_center_x, face_center_y
-                )
-                
-                cv2.circle(frame, (gaze_x, gaze_y), 10, (0, 0, 255), -1)
-                
-                # Calculate relative movement with deadzone
-                frame_center_x = frame.shape[1] // 2
-                frame_center_y = frame.shape[0] // 2
-                deadzone_threshold = 0.3 * min(frame.shape[1], frame.shape[0]) / 2
-                
-                dx = gaze_x - frame_center_x
-                dy = gaze_y - frame_center_y
-                distance = math.hypot(dx, dy)
-                
-                if distance > deadzone_threshold:
-                    # Scale movement speed based on distance from center
-                    speed = 20  # pixels per frame
-                    move_x = int(speed * dx / distance)
-                    move_y = int(speed * dy / distance)
-                    
-                    # RELATIVE movement
-                    mouse.move(move_x, move_y)
-            
-            # Blink detection
+            time_calculator(start_time, "Moving mouse")
+
+            # --- Blink detection via face_mesh ---
+            start_time = time.time()
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            time_calculator(start_time, "Moving mouse") #TIME END
-            start_time = time.time() #TIME CALC
             results = face_mesh.process(image_rgb)
-            
+
             if results.multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
                 h, w, _ = frame.shape
                 landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
                 left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
                 right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
-                
+
                 left_closed = left_ear < EAR_CLOSE_THRESHOLD
                 right_closed = right_ear < EAR_CLOSE_THRESHOLD
                 left_open = left_ear > EAR_OPEN_THRESHOLD
                 right_open = right_ear > EAR_OPEN_THRESHOLD
-                
+
                 if left_closed and right_closed:
                     both_blink_frames += 1
                     left_blink_frames = 0
@@ -878,68 +808,66 @@ def main():
                     left_blink_frames = 0
                     right_blink_frames = 0
                     both_blink_frames = 0
-                
+
                 now = now_ms()
                 if now - last_blink_ms >= ACTION_COOLDOWN_MS:
                     if both_blink_frames >= 2:
-                        mouse.click(Button.left, 1)
+                        #mouse.click(Button.left, 1)
                         last_blink_ms = now
                         both_blink_frames = 0
-
                     elif right_blink_frames >= 2:
-                        mouse.click(Button.right, 1)
+                        #mouse.click(Button.right, 1)
                         last_blink_ms = now
                         right_blink_frames = 0
-
                     elif left_blink_frames >= 2:
                         direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
-                        if direction == "UP":
-                            # Positive scroll value → scroll up
-                            mouse.scroll(0, SCROLL_AMOUNT)
-                        elif direction == "DOWN":
-                            # Negative scroll value → scroll down
-                            mouse.scroll(0, -SCROLL_AMOUNT)
+                        #if direction == "UP":
+                            #mouse.scroll(0, SCROLL_AMOUNT)
+                        #elif direction == "DOWN":
+                            #mouse.scroll(0, -SCROLL_AMOUNT)
                         last_blink_ms = now
                         left_blink_frames = 0
-            time_calculator(start_time, "Blinking stuff") #TIME END
-        # Display FPS and info on frame
-        fps = fps_counter.get_fps()  
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Frame: {frame_count}", (10, 70), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Show calibration status
-        if coeffs is not None:
-            cv2.putText(frame, "Calibrated", (10, 110), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "No Calibration", (10, 110), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
+            time_calculator(start_time, "Blinking stuff")
+
+            # Display FPS and info on frame
+            fps = fps_counter.get_fps()
+            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"Frame: {frame_count}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            if coeffs is not None:
+                cv2.putText(frame, "Calibrated", (10, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            else:
+                cv2.putText(frame, "No Calibration", (10, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            if writer:
+                writer.write(frame)
+
+            cv2.imshow("Gaze Tracking", frame)
+
+            key = cv2.waitKey(1)
+            if key == ord('q'):
+                break
+            elif key == ord('c'):  # Press 'c' to recalibrate
+                print("\nRecalibrating...")
+                coeffs = run_calibration(cap, engine, detector)
+
+    finally:
+        # Cleanup
+        print(f"\n\nShutting down...")
+        print(f"Total frames processed: {frame_count}")
+        print(f"Average FPS: {fps_counter.get_fps():.1f}")
+
+        cap.release()
         if writer:
-            writer.write(frame)
-        
-        cv2.imshow("Gaze Tracking", frame)
-        
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-            break
-        elif key == ord('c'):  # Press 'c' to recalibrate
-            print("\nRecalibrating...")
-            coeffs = run_calibration(cap, engine, detector)
-    
-    # Cleanup
-    print(f"\n\nShutting down...")
-    print(f"Total frames processed: {frame_count}")
-    print(f"Average FPS: {fps_counter.get_fps():.1f}")
-    
-    cap.release()
-    if writer:
-        writer.release()
-    cv2.destroyAllWindows()
+            writer.release()
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
 # pip install -r reqs.txt*/
-# python  fullpipeline_FIXIT.py --source 0 --model best_model.onnx
+# python hitler.py --source 0 --model best_model.onnx
+# python hitler.py --source 0 --model mobileone_s0_gaze.onnx
