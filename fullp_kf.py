@@ -853,7 +853,6 @@ def main():
         start_time = time.time() #TIME CALC
         bboxes, _ = detector.detect(frame)
         time_calculator(start_time, "Face detect") #TIME END
-        bboxes, _ = detector.detect(frame)
         
         for bbox in bboxes:
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
@@ -906,10 +905,10 @@ def main():
                 raw_y = np.clip(raw_y, 0, screen_height - 1)
                 
                 # Apply Kalman filter for smoothing
+                start_time = time.time() #TIME CALC
                 smooth_x, smooth_y = kalman.update(raw_x, raw_y)
-                
+                time_calculator(start_time, "Kalmony filter") #TIME END
                 # ======== ADVANCED SPEED CONTROL ========
-                
                 # 1. Get current mouse position
                 current_x, current_y = mouse.position
                 
@@ -1069,7 +1068,10 @@ def main():
         elif key == ord('c'):  # Press 'c' to recalibrate
             print("\nRecalibrating...")
             coeffs = run_calibration(cap, engine, detector)
+            start_time = time.time() #TIME CALC
             kalman.reset()  # Reset Kalman filter after recalibration
+            time_calculator(start_time, "Kalmony reset") #TIME END
+
             print("✓ Kalman filter reset")
     
     # Cleanup
@@ -1085,4 +1087,4 @@ def main():
 if __name__ == "__main__":
     main()
 # pip install -r reqs.txt*/
-# python full_pipeline.py --source 0 --model best_model.onnx
+# python fullp_kf.py --source 0 --model best_model.onnx
