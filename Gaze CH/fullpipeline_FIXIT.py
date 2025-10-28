@@ -3,6 +3,9 @@ import logging
 import argparse 
 import warnings
 import numpy as np
+import torch
+import torch.nn.functional as F
+from torchvision import transforms
 import math
 import mediapipe as mp
 from pynput.mouse import Controller, Button
@@ -11,6 +14,7 @@ from typing import Tuple
 import onnxruntime as ort
 import time 
 import tkinter as tk
+from typing import Tuple, Optional
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -198,7 +202,7 @@ def extract_eyes_with_mediapipe(frame, face_landmarks, face_bbox):
     h, w, _ = frame.shape
     x_min, y_min, x_max, y_max = map(int, face_bbox[:4])
     
-    # MediaPipe eye landmark indices
+    # MediaPipe eye landmark indices change to harcascade eye
     LEFT_EYE_INDICES = [33, 133, 160, 159, 158, 157, 173, 155, 154, 153, 145, 144, 163, 7]
     RIGHT_EYE_INDICES = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385]
     
@@ -430,232 +434,325 @@ class GazeEstimationTorch:
 
 
 
-def run_calibration(cap, engine, detector):
-    """Enhanced calibration with visual feedback and validation."""
-    global calibration_gaze, calibration_screen
-    
-    # Reset calibration data
-    calibration_gaze = []
-    calibration_screen = []
-    
-    root = tk.Tk()
-    root.withdraw()  # hide the window
-    swidth = root.winfo_screenwidth()
-    sheight = root.winfo_screenheight()
+def gaze_to_screen_projection(pitch: float, yaw: float, screen_width:int, 
+                            screen_hight: int, face_x: float, face_y: float,
+                            frame_width: int, frame_height: int) -> Tuple[int, int]:
+    """
+        Convert the gaze angles to screen coordinates using a consistent formula
+        args:
+            pitch: Gaze pitch angle in radians (positive = looking down, negative = looking up)
+            yaw: Gaze yaw angle in radians (positive = looking right, negative = looking left)
+            screen_width: Width of the screen in pixels (in pixels)
+            screen_height: Height of the screen in pixels (in pixels)
+            face_x: X coordinate of the face center in the frame (face center positions in frame coordinates)
+            face_y: Y coordinate of the face center in the frame (face center positions in frame coordinates)
+            frame_width: Width of the video frame in pixels (camera frame dimensions)
+            frame_height: Height of the video frame in pixels (camera frame dimensions)
+        returns: (screen_x, screen_y): Predicted screen coordinates in pixels
+    """
+    # Sensitivity factors to map angles to screen movement
+    # the gaze angles are small, so we need to scale them up to screen size
+    #gaze angles from -42 to +42 degrees -> map to screen size
+
+    center_x = screen_width / 2 #get screen center
+    center_y = screen_hight / 2 #get screen center
+
+    #convert angles to screen displacement
+    #scale factor: how many pixels per radian 
+    # screen_width / (max expected yaw range in radians)
+
+    horizontal_scale = screen_width / np.radians(84) #assuming -42 to +42 degrees (this can be adjusted by testing)
+    vertical_scale = screen_hight / np.radians(84)  #assuming -42 to +42 degrees (this can be adjusted by testing)
+
+    #apply projection formula 
+    screen_x = center_x + (yaw * horizontal_scale)
+    screen_y = center_y + (pitch * vertical_scale)
+
+    #optional for u hassan, add head position compensation here
+    #If face ,oves right in the frame, the gaze point should move right on the screen and vice versa and so on \
+    face_offset_x = (face_x / frame_width - 0.5) * screen_width * 0.2 #20% of screen width 
+    face_offset_y = (face_y / frame_height - 0.5) * screen_hight * 0.2 #20% of screen height
+
+    #clamp to screne bounds
+    screen_x = np.clip(screen_x + face_offset_x, 0, screen_width - 1)
+    screen_y = np.clip(screen_y + face_offset_y, 0, screen_hight - 1)
+
+    return int(screen_x), int(screen_y)
+
+def run_offset_calibration(cap, engine, detector , calibration_points):
+    """
+        This calibration measures the model's systematic error (offset)
+
+        how it works:
+        1. show calibration points on screen
+        2. for each point, capture the model predection (using projection to screen coordinates)
+        3. calculate the difference between the predictions and the actual points
+        4. average the differences to get the offsets
+        5. return the offsets to apply to all future predictions 
+    """
+
+    #get screen size
+    root = tk.TK()
+    root.withdraw()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
     root.destroy()
+
+    #get frame dimensions
+    ret, test_frame = cap.read()
+    if not ret:
+        print("[ERROR] Could not read from video source for calibration")
+        return None
+    frame_height, frame_width = test_frame.shape[:2]
+
     print("\n" + "="*80)
-    print("CALIBRATION STARTING")
+    print("OFFSET CALIBRATION")
     print("="*80)
-    print(f"Screen size: {swidth}x{sheight}")
-    print(f"Calibration points: {len(calibration_points)}")
+    print(f"Screen: {screen_width}x{screen_height}")
+    print(f"Camera: {frame_width}x{frame_height}")
+    print(f"Points: {len(calibration_points)}")
     print("\nInstructions:")
-    print("  - Look at the GREEN circle when it appears")
-    print("  - Keep your head still during calibration")
-    print("  - The system will capture your gaze automatically")
-    print("\nGet ready...")
-    
-    # 5-second countdown before calibration starts
-    for countdown in range(5, 0, -1):
-        dummy_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
-        
-        # Large countdown number in center
-        text = str(countdown)
-        font_scale = 8
-        thickness = 15
-        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-        text_x = (swidth - text_size[0]) // 2
-        text_y = (sheight + text_size[1]) // 2
-        
-        cv2.putText(dummy_frame, text, 
-                   (text_x, text_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
-        
-        # Instruction text at top
-        instruction = "Calibration starting in..."
-        cv2.putText(dummy_frame, instruction, 
-                   (swidth//2 - 250, 100), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
-        
-        # Additional instruction at bottom
-        bottom_text = "Look at the green circles and keep your head still"
-        cv2.putText(dummy_frame, bottom_text, 
-                   (swidth//2 - 400, sheight - 50), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        
-        cv2.imshow("Calibration", dummy_frame)
-        cv2.waitKey(1000)  # Wait 1 second
+    print("  1. Look DIRECTLY at each GREEN circle")
+    print("  2. Keep your head STILL")
+    print("  3. Stay at the SAME distance from screen")
+    print("\nStarting in...")
+
+    #counting down 
+    for countdown in range (3, 0, -1):
         print(f"  {countdown}...")
+        dummy_frame = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+        cv2.putText(dummy_frame, str(countdown), 
+                   (screen_width//2 - 50, screen_height//2),
+                   cv2.FONT_HERSHEY_SIMPLEX, 5, (0, 255, 0), 10)
+        cv2.imshow("Calibration", dummy_frame)
+        cv2.waitKey(1000)
     
-    print("  Starting calibration NOW!\n")
-    
+    #store errors for each calibration point
+    errors_x = []
+    errors_y = []
     successful_points = 0
-    
+
     for idx, (norm_x, norm_y) in enumerate(calibration_points):
-        target_x, target_y = int(norm_x * swidth), int(norm_y * sheight)
-        
-        print(f"\nPoint {idx + 1}/{len(calibration_points)}: ({target_x}, {target_y})")
-        
-        # Show countdown for each calibration point
-        for countdown in range(3, 0, -1):
-            calib_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
+        #calculate target screen position
+        target_x = inta(norm_x * screen_width)
+        target_y = int(norm_y * screen_height)
+
+        print(f"\nPoint {idx+1}/{len(calibration_points)}: Look at ({target_x}, {target_y})")
+
+        #show calibration point for 2 seconds
+        for countdonw in range(2, 0, -1):
+            calib_frame = np.zeros((screen_height, screen_width, 3), dtype = np.uint8)
+
+            #draw the target
+            cv2.circle(calib_frame, (target_x, target_y), 50, (0, 255, 0), -1)
+            cv2.circle(calib_frame, (target_x, target_y), 55, (225, 255, 225), 3)
+
+            #countdown text
+            cv2.putText(calib_frame, f"Capturing in {countdonw}",(target_x -25, target_y +15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Draw target circle
-            cv2.circle(calib_frame, (target_x, target_y), 30, (0, 255, 0), -1)
-            cv2.circle(calib_frame, (target_x, target_y), 35, (0, 255, 0), 3)
-            
-            # Countdown inside circle
-            cv2.putText(calib_frame, str(countdown), 
-                       (target_x - 20, target_y + 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3)
-            
-            # Point number at top
-            cv2.putText(calib_frame, f"Point {idx + 1}/{len(calibration_points)}", 
-                       (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            
-            # Instruction
-            cv2.putText(calib_frame, "Look at the GREEN circle", 
-                       (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(calib_frame, f"Pount {idx+1}/{len(calibration_points)} - look at the circle",
+                        (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             
             cv2.imshow("Calibration", calib_frame)
             cv2.waitKey(1000)
-        
-        # Capture multiple frames and average
-        gaze_samples = []
-        for sample_idx in range(5):  # Take 5 samples
+
+        #Capture frame and get model prediction
+        samples_pitch = []
+        samples_yaw = []
+        samples_face_x = [] 
+        samples_face_y = []
+
+        print("  Capturing samples...", end = " ")
+
+        for sample_idx in range(30): #capture 30 samples for averaging
             ret, frame = cap.read()
-            if not ret:
-                print("  ✗ Failed to read frame")
+            if not ret: 
+                print("[ERROR] Could not read from video source during calibration")
                 continue
-            
-            bboxes, _ = detector.detect(frame)
+            bboxes, _ = detector.detect (frame)
             if len(bboxes) == 0:
-                print("  ✗ No face detected")
+                print(".", end="", flush=True)
                 continue
-            
             x_min, y_min, x_max, y_max = map(int, bboxes[0][:4])
             face_img = frame[y_min:y_max, x_min:x_max]
-            
+
             if face_img.size == 0:
-                print("  ✗ Invalid face crop")
+                print(".", end="", flush=True)
                 continue
-            
-            try:
-                pitch, yaw = engine.estimate(face_img)
-                gaze_samples.append((pitch, yaw))
-                
-                # Show visual feedback during capture
-                calib_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
-                
-                # Pulsing circle effect
-                radius = 30 + (sample_idx * 5)
+            try: 
+                #get gaze estimation 
+                pitch, yaw = engine.estimate(face_img, use_eye_extraction=True)
+
+                #store face postion 
+                face_center_x = (x_min + x_max) / 2
+                face_center_y = (y_min + y_max) / 2
+
+                samples_pitch.append(pitch)
+                samples_yaw.append(yaw)
+                samples_face_x.append(face_center_x)
+                samples_face_y.append(face_center_y)
+
+                #visual feedback 
+                calib_frame = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+                radius = 50 + sample_idx * 3
                 cv2.circle(calib_frame, (target_x, target_y), radius, (0, 255, 0), -1)
-                
-                # Progress indicator
-                cv2.putText(calib_frame, f"Capturing {sample_idx + 1}/5", 
-                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                # Show gaze angles
-                cv2.putText(calib_frame, f"Pitch: {np.degrees(pitch):.1f}deg", 
-                           (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(calib_frame, f"Yaw: {np.degrees(yaw):.1f}deg", 
-                           (50, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                # Progress bar
-                bar_width = 400
-                bar_height = 30
-                bar_x = (swidth - bar_width) // 2
-                bar_y = sheight - 100
-                
-                cv2.rectangle(calib_frame, (bar_x, bar_y), 
-                            (bar_x + bar_width, bar_y + bar_height), 
-                            (255, 255, 255), 2)
-                
-                progress = int((sample_idx + 1) / 5 * bar_width)
-                cv2.rectangle(calib_frame, (bar_x, bar_y), 
-                            (bar_x + progress, bar_y + bar_height), 
-                            (0, 255, 0), -1)
-                
+                cv2.putText(calib_frame, f"Capturing samples... {sample_idx+1}/30",
+                        (target_x - 30, target_y - 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.imshow("Calibration", calib_frame)
-                cv2.waitKey(100)
-                
+                cv2.waitKey(50)
+
             except Exception as e:
-                print(f"  ✗ Estimation failed: {e}")
+                print(f"\n Sample {sample_idx} failed: {e}")
                 continue
-        
-        # Average the samples
-        if len(gaze_samples) >= 3:  # Need at least 3 good samples
-            avg_pitch = np.mean([p for p, y in gaze_samples])
-            avg_yaw = np.mean([y for p, y in gaze_samples])
-            calibration_gaze.append((avg_pitch, avg_yaw))
-            calibration_screen.append((target_x, target_y))
+
+            #process the samples
+            if len(samples_pitch) < 5:
+                print("Not enough valid samples captured, skipping point.")
+                continue
+            
+            #remove outliers using the median
+            def remove_outliers(data):
+                if len(data) < 3:
+                    return data
+                median = np.median(data)
+                mad = np.median(np.abs(data - median))
+                if mad < 1e-6:
+                    return data
+                threashold = 2.0 
+                z_scores = np,abs(data - median) / (mad + 1e-6)
+                return data[z_scores < threashold]
+            
+            clean_pitch = remove_outliers(np.array(samples_pitch))
+            clean_yaw = remove_outliers(np.array(samples_yaw))
+
+            #average the clean samples 
+            avg_pitch = np.median(clean_pitch)
+            avg_yaw = np.median(clean_yaw)
+            avg_face_x = np.median(samples_face_x)
+            avg_face_y = np.median(samples_face_y)
+
+            #project to screen using our fomrula 
+            predicted_x, predicted_y = gaze_to_screen_projection(
+                avg_pitch, avg_yaw, screen_width, screen_height,
+                avg_face_x, avg_face_y, frame_width, frame_height
+            )
+
+            #calculate error (how bad our model did :) )
+            error_x = target_x - predicted_x
+            error_y = target_y - predicted_y
+            error_dist = np.sqrt(error_x **2 + error_y **2) #euclidean distance 
+
+            errors_x.append(error_x)
+            errors_y.append(error_y)
             successful_points += 1
-            print(f"  ✓ Captured (pitch: {np.degrees(avg_pitch):.1f}°, yaw: {np.degrees(avg_yaw):.1f}°)")
+            print(f"Done. Prediction: ({predicted_x}, {predicted_y}), Error: ({error_x}, {error_y}), Distance: {error_dist:.1f}px")
+            print(f" used {len(clean_pitch)}/{len(samples_pitch)} samples after outlier removal.")
+
+            #show reuslts 
+            result_frame = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+
+            # draw target
+            cv2.circle(result_frame, (target_x, target_y), 50, (0, 255, 0), -1)
+            cv2.putText(result_frame, "Target", (target_x - 60, target_y - 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Show success feedback
-            success_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
-            cv2.circle(success_frame, (target_x, target_y), 50, (0, 255, 0), -1)
-            cv2.putText(success_frame, "SUCCESS!", 
-                       (target_x - 70, target_y - 70),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.imshow("Calibration", success_frame)
-            cv2.waitKey(500)
-        else:
-            print(f"  ✗ Failed - only got {len(gaze_samples)}/5 samples")
+            #draw prediction
+            cv2.circle(result_frame, (predicted_x, predicted_y), 50, (255, 0, 0), -1)
+            cv2.putText(result_frame, "Prediction", (predicted_x - 80, predicted_y + 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Show failure feedback
-            fail_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
-            cv2.circle(fail_frame, (target_x, target_y), 50, (0, 0, 255), -1)
-            cv2.putText(fail_frame, "FAILED", 
-                       (target_x - 60, target_y - 70),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv2.imshow("Calibration", fail_frame)
-            cv2.waitKey(500)
-    
-    # Show completion message
-    complete_frame = np.zeros((sheight, swidth, 3), dtype=np.uint8)
-    cv2.putText(complete_frame, "CALIBRATION COMPLETE", 
-               (swidth//2 - 300, sheight//2 - 50),
-               cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-    cv2.putText(complete_frame, f"{successful_points}/{len(calibration_points)} points captured", 
-               (swidth//2 - 200, sheight//2 + 50),
-               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    cv2.imshow("Calibration", complete_frame)
-    cv2.waitKey(2000)
-    
-    cv2.destroyWindow("Calibration")
-    
+            #draw error lines 
+            cv2.arrowline(result_frame, (predicted_x, predicted_y), (target_x, target_y),
+                            (0, 255, 255), 2, tipLength=0.2)
+            cv2.putText(result_frame, f"Error: {error_dist:.1f}px",
+                        ((predicted_x + target_x)//2, (predicted_y + target_y)//2 - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            cv2.imshow("Calibration Result", result_frame)
+            cv2.waitKey(2000) #show for 2 seconds
+
+    cv2.destroyAllWindows("Calibration")
+
+    #calculate average offsets
+    if successful_points < 3:
+        print("[ERROR] Not enough successful calibration points, calibration failed.")
+        return None
+    offset_x = np.median(errors_x)
+    offset_y = np.median(errors_y)
+
+    mean_error = np.mean([np.sqrt(ex**2 + ey**2) for ex, ey in zip(errors_x, errors_y)])
+    median_error = np.median([np.sqrt(ex**2 + ey**2) for ex, ey in zip(errors_x, errors_y)])
+    max_error = np.max([np.sqrt(ex**2 + ey**2) for ex, ey in zip(errors_x, errors_y)])
+
     print("\n" + "="*80)
     print(f"CALIBRATION COMPLETE: {successful_points}/{len(calibration_points)} points")
     print("="*80)
+    print(f"\nCalibration Offset: ({offset_x:.0f}, {offset_y:.0f}) pixels")
+    print(f"\nAccuracy Metrics:")
+    print(f"  Mean error:   {mean_error:.1f} pixels")
+    print(f"  Median error: {median_error:.1f} pixels")
+    print(f"  Max error:    {max_error:.1f} pixels")
     
-    if successful_points < 3:
-        print("⚠ WARNING: Not enough calibration points! Using fallback projection.")
-        return None
+    if mean_error < 150:
+        print(f"  ✓ GOOD calibration!")
+    elif mean_error < 300:
+        print(f"  ⚠ Acceptable, but could be better")
+    else:
+        print(f"  ✗ Poor calibration - consider recalibrating")
     
-    # Fit regression model
-    calibration_gaze = np.array(calibration_gaze)
-    calibration_screen = np.array(calibration_screen)
-    X = np.hstack([calibration_gaze, np.ones((len(calibration_gaze), 1))])
-    Y = calibration_screen
-    coeffs, residuals, rank, s = np.linalg.lstsq(X, Y, rcond=None)
-    
-    # Calculate calibration error
-    predicted = X @ coeffs
-    errors = np.linalg.norm(predicted - Y, axis=1)
-    mean_error = np.mean(errors)
-    print(f"\nCalibration accuracy:")
-    print(f"  Mean error: {mean_error:.1f} pixels")
-    print(f"  Max error: {np.max(errors):.1f} pixels")
-    
-    return coeffs
+    # Return calibration data
+    return {
+        'offset_x': offset_x,
+        'offset_y': offset_y,
+        'screen_width': screen_width,
+        'screen_height': screen_height,
+        'frame_width': frame_width,
+        'frame_height': frame_height
+    }
 
-def predict_with_calibration(pitch, yaw, coeffs):
-    gaze_vector = np.array([pitch, yaw, 1.0])#add bias term
-    screen_point = gaze_vector@coeffs
-    return int(screen_point[0]), int(screen_point[1])
+def predict_gaze_with_offset(pitch: float, yaw: float,
+                            face_x: float, face_y: float,
+                            calibration_data: dict) -> Tuple[int, int]:
+    """
+    Predict screen coordinates with offset correction.
+    
+    Args:
+        pitch, yaw: Gaze angles from model
+        face_x, face_y: Face position in frame
+        calibration_data: Dict from run_offset_calibration()
+    
+    Returns:
+        (screen_x, screen_y): Corrected screen coordinates
+    """
+    
+    if calibration_data is None:
+        # No calibration - use uncorrected projection
+        # You'll need screen dimensions here
+        return None, None
+    
+    # Step 1: Project using formula
+    predicted_x, predicted_y = gaze_to_screen_projection(
+        pitch, yaw,
+        calibration_data['screen_width'],
+        calibration_data['screen_height'],
+        face_x, face_y,
+        calibration_data['frame_width'],
+        calibration_data['frame_height']
+    )
+    
+    # Step 2: Apply offset correction
+    corrected_x = predicted_x + calibration_data['offset_x']
+    corrected_y = predicted_y + calibration_data['offset_y']
+    
+    # Step 3: Clamp to screen
+    corrected_x = np.clip(corrected_x, 0, calibration_data['screen_width'] - 1)
+    corrected_y = np.clip(corrected_y, 0, calibration_data['screen_height'] - 1)
+    
+    return int(corrected_x), int(corrected_y)
 
 def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int, 
-                 face_center_x: int, face_center_y: int) -> Tuple[int, int]:
+                face_center_x: int, face_center_y: int) -> Tuple[int, int]:
     arrow_dx = -np.sin(pitch_rad) * np.cos(yaw_rad)
     arrow_dy = -np.sin(yaw_rad)
     screen_scale = min(width, height) * 0.8
@@ -665,6 +762,88 @@ def project_to_2d(pitch_rad: float, yaw_rad: float, width: int, height: int,
         np.clip(gaze_x, 0, width-1),
         np.clip(gaze_y, 0, height-1)
     )
+
+
+class KalmanFilter2D: 
+    #kalman filter for smoothing the mouse movement
+    def __init__(self, process_variance=1, measurement_variance=10): #we can play around with those values
+        """
+        Args:
+            process_variance: How much we trust the model's predictions (lower = trust model more)
+            measurement_variance: How much noise in gaze measurements (higher = more smoothing)
+        """
+        # State: [x, y, dx, dy] - position and velocity
+        self.state = np.array([0.0, 0.0, 0.0, 0.0])
+    
+        # Covariance matrix - uncertainty in our estimate
+        self.covariance = np.eye(4) * 1000 #we start with high unceertainty first 
+
+        # State transition matrix - how state evolves
+        # Assumes constant velocity: new_x = x + dx, new_dx = dx
+
+        self.F = np.array([
+            [1, 0, 1, 1], #x = x + dx
+            [0, 1, 0, 1], #y = y + dy
+            [0, 0, 1 ,0], #dx = dx (const velocity)
+            [0, 0, 0, 1] # dy = dy
+        ])
+
+        # Measurement matrix - we only measure position, not velocity
+        self.H = np.array ([
+            [1, 0 ,0 ,0], # measured_x = 1*x + 0*y + 0*dx + 0*dy
+            [0, 1, 0, 0]  # measured_y = 0*x + 1*y + 0*dx + 0*dy
+        ])
+
+        # Process noise covariance
+        self.Q = np.eye(4) * process_variance
+
+        # Measurement noise covariance
+        self.R = np.eye(2) * measurement_variance
+
+        self.initialized = False
+
+    def update(self, measurement_x, measurement_y): 
+        """
+        Update filter with new gaze measurement.
+        
+        Args:
+            measurement_x: Raw gaze x position
+            measurement_y: Raw gaze y position
+            
+        Returns:
+            (smoothed_x, smoothed_y): Filtered position
+        """
+        measurement = np.array([measurement_x,measurement_y])
+
+        # Initialize with first measurement
+        if not self.initialized:
+            self.state[0] = measurement_x
+            self.state[1] = measurement_y
+            self.initialized = True
+            return measurement_x, measurement_y
+        
+        # PREDICT STEP
+        # Predict next state based on motion model
+        predicted_state = self.F @ self.state
+        predicted_covariance  = self.F @ self.covariance @ self.F.T + self.Q
+
+        # UPDATE STEP
+        # Calculate Kalman gain (how much to trust measurement vs prediction)
+        S = self.H @ predicted_covariance @ self.H.T + self.R
+        K = predicted_covariance @ self.H.T @ np.linalg.inv(S)
+
+        # Update state with measurement
+        innovation = measurement - (self.H @ predicted_state)
+        self.state = predicted_state + K @ innovation
+        self.covariance = (np.eye(4) - K @ self.H) @ predicted_covariance
+
+        return self.state[0], self.state[1]
+    
+    def reset(self):
+        """Reset filter state."""
+        self.state = np.array([0.0, 0.0, 0.0, 0.0])
+        self.covariance = np.eye(4) * 1000
+        self.initialized = False 
 
 def main():
     args = parse_args()
@@ -749,6 +928,12 @@ def main():
     screen_width = root.winfo_screenwidth() #get screen size
     screen_height = root.winfo_screenheight() #get screen size
     root.destroy()    
+
+    #Kalman filter initilization 
+    kalman = KalmanFilter2D(
+        process_variance=1.0, # HOW MUCH MODEL NOISE
+        measurement_variance=25  #HOW MUCH MEASUREMENT NOISE
+        )
     # Main tracking loop
     while cap.isOpened():
         start_time = time.time() #TIME CALC
@@ -764,7 +949,6 @@ def main():
         time_calculator(start_time, "Face detect") #TIME END
         
         for bbox in bboxes:
-            start_time = time.time() 
             x_min, y_min, x_max, y_max = map(int, bbox[:4])
             face_img = frame[y_min:y_max, x_min:x_max]
             
@@ -774,17 +958,20 @@ def main():
             # Extract eye region for model
             eye_region = extract_eye_region_simple(face_img)
             normalized = normalize_for_mpiigaze(eye_region)
+            
+            
             # Get gaze estimation
             pitch, yaw = engine.estimate(face_img, use_eye_extraction=True)
-            time_calculator(start_time, "Inference Time") #TIME END
+            
             # CRITICAL: Get gaze estimation
-            # pitch, yaw = engine.estimate(face_img)
-            start_time = time.time() #TIME CALC
+            pitch, yaw = engine.estimate(face_img)
+            
             # Visualization on video frame
             draw_bbox_gaze(frame, bbox, pitch, yaw)
             face_center_x, face_center_y = (x_min + x_max) // 2, (y_min + y_max) // 2
             
             # OPTION 1: If calibrated, map directly to screen coordinates
+            """"
             if coeffs is not None:
                 # This gives SCREEN coordinates (0 to screen_width, 0 to screen_height)
                 screen_x, screen_y = predict_with_calibration(pitch, yaw, coeffs)
@@ -792,25 +979,76 @@ def main():
                 # Clamp to screen bounds
                 screen_x = np.clip(screen_x, 0, screen_width - 1)
                 screen_y = np.clip(screen_y, 0, screen_height - 1)
-                gaze_x, gaze_y = project_to_2d(
-                    pitch, yaw, frame.shape[1], frame.shape[0], 
-                    face_center_x, face_center_y
-                )
+                
                 # Move cursor to ABSOLUTE screen position
-                frame_center_x = frame.shape[1] // 2
-                frame_center_y = frame.shape[0] // 2
-                speed = 20  # pixels per frame
-                dx = gaze_x - frame_center_x
-                dy = gaze_y - frame_center_y
-                norm = math.hypot(dx, dy)
-                move_x = int(speed * dx / norm)
-                move_y = int(speed * dy / norm)
-                mouse.move(move_x, move_y)
+                mouse.position = (screen_x, screen_y)
                 
                 # For visualization on frame, project screen coords to frame coords
                 frame_x = int(screen_x * frame.shape[1] / screen_width)
                 frame_y = int(screen_y * frame.shape[0] / screen_height)
                 cv2.circle(frame, (frame_x, frame_y), 10, (0, 0, 255), -1)
+            """
+            # OPTION 1: If calibrated, map directly to screen coordinates
+            # OPTION 1: If calibrated, map directly to screen coordinates
+            if coeffs is not None:
+                # Get raw gaze prediction
+                raw_x, raw_y = predict_with_calibration(pitch, yaw, coeffs)
+                
+                # Clamp raw prediction to screen bounds
+                raw_x = np.clip(raw_x, 0, screen_width - 1)
+                raw_y = np.clip(raw_y, 0, screen_height - 1)
+                
+                # Apply Kalman filter for smoothing
+                start_time = time.time() #TIME CALC
+                smooth_x, smooth_y = kalman.update(raw_x, raw_y)
+                time_calculator(start_time, "Kalmony filter") #TIME END
+                # ======== ADVANCED SPEED CONTROL ========
+                # 1. Get current mouse position
+                current_x, current_y = mouse.position
+                
+                # 2. Calculate movement delta
+                delta_x = smooth_x - current_x
+                delta_y = smooth_y - current_y
+                
+                # 3. Apply speed multiplier
+                SPEED_MULTIPLIER = 0.15  # ← MAIN CONTROL: 0.05=super slow, 0.3=medium, 1.0=fast
+                delta_x *= SPEED_MULTIPLIER
+                delta_y *= SPEED_MULTIPLIER
+                
+                # 4. Limit maximum speed per frame
+                MAX_SPEED = 10  # ← Maximum pixels per frame (5=very slow, 20=medium, 50=fast)
+                distance = math.sqrt(delta_x**2 + delta_y**2)
+                if distance > MAX_SPEED:
+                    scale = MAX_SPEED / distance
+                    delta_x *= scale
+                    delta_y *= scale
+                
+                # 5. Add deadzone (optional - prevents tiny jitters)
+                DEADZONE = 2  # Don't move if change is less than 2 pixels
+                if abs(delta_x) < DEADZONE and abs(delta_y) < DEADZONE:
+                    continue  # Skip this frame
+                
+                # 6. Calculate new position
+                new_x = int(current_x + delta_x)
+                new_y = int(current_y + delta_y)
+                
+                # 7. Clamp to screen bounds
+                new_x = np.clip(new_x, 0, screen_width - 1)
+                new_y = np.clip(new_y, 0, screen_height - 1)
+                
+                # 8. Move cursor
+                mouse.position = (new_x, new_y)
+                
+                # ========================================
+                
+                # Visualization (optional - show where you're looking vs where cursor is)
+                frame_smooth_x = int(smooth_x * frame.shape[1] / screen_width)
+                frame_smooth_y = int(smooth_y * frame.shape[0] / screen_height)
+                cv2.circle(frame, (frame_smooth_x, frame_smooth_y), 8, (0, 255, 0), 2)  # Green = target
+                
+                frame_cursor_x = int(new_x * frame.shape[1] / screen_width)
+                frame_cursor_y = int(new_y * frame.shape[0] / screen_height)
+                cv2.circle(frame, (frame_cursor_x, frame_cursor_y), 6, (255, 0, 0), -1)  # Blue = actual cursor
             
             # OPTION 2: If not calibrated, use relative movement with deadzone
             else:
@@ -833,18 +1071,17 @@ def main():
                 
                 if distance > deadzone_threshold:
                     # Scale movement speed based on distance from center
-                    speed = 20  # pixels per frame
+                    speed = 0.05 # pixels per frame
                     move_x = int(speed * dx / distance)
                     move_y = int(speed * dy / distance)
                     
                     # RELATIVE movement
                     mouse.move(move_x, move_y)
-            time_calculator(start_time, "Moving mouse") #TIME END
-            start_time = time.time() #TIME CALC
+            
             # Blink detection
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            
+            time_calculator(start_time, "Moving mouse") #TIME END
+            start_time = time.time() #TIME CALC
             results = face_mesh.process(image_rgb)
             
             if results.multi_face_landmarks:
@@ -879,26 +1116,26 @@ def main():
                 now = now_ms()
                 if now - last_blink_ms >= ACTION_COOLDOWN_MS:
                     if both_blink_frames >= 2:
-                        #mouse.click(Button.left, 1)
+                        mouse.click(Button.left, 1)
                         last_blink_ms = now
                         both_blink_frames = 0
 
                     elif right_blink_frames >= 2:
-                        #mouse.click(Button.right, 1)
+                        mouse.click(Button.right, 1)
                         last_blink_ms = now
                         right_blink_frames = 0
 
                     elif left_blink_frames >= 2:
                         direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
-                        #if direction == "UP":
+                        if direction == "UP":
                             # Positive scroll value → scroll up
-                            #mouse.scroll(0, SCROLL_AMOUNT)
-                        #elif direction == "DOWN":
+                            mouse.scroll(0, SCROLL_AMOUNT)
+                        elif direction == "DOWN":
                             # Negative scroll value → scroll down
-                            #mouse.scroll(0, -SCROLL_AMOUNT)
+                            mouse.scroll(0, -SCROLL_AMOUNT)
                         last_blink_ms = now
                         left_blink_frames = 0
-            time_calculator(start_time, "Blinking ") #TIME END
+            time_calculator(start_time, "Blinking stuff") #TIME END
         # Display FPS and info on frame
         fps = fps_counter.get_fps()  
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
@@ -925,6 +1162,11 @@ def main():
         elif key == ord('c'):  # Press 'c' to recalibrate
             print("\nRecalibrating...")
             coeffs = run_calibration(cap, engine, detector)
+            start_time = time.time() #TIME CALC
+            kalman.reset()  # Reset Kalman filter after recalibration
+            time_calculator(start_time, "Kalmony reset") #TIME END
+
+            print("✓ Kalman filter reset")
     
     # Cleanup
     print(f"\n\nShutting down...")
@@ -939,4 +1181,4 @@ def main():
 if __name__ == "__main__":
     main()
 # pip install -r reqs.txt*/
-# python fullpipeline_FIXIT.py --source 0 --model best_model.onnx
+# python fullp_kf.py --source 0 --model best_model.onnx 
