@@ -15,6 +15,9 @@ import onnxruntime as ort
 import time 
 import tkinter as tk
 from typing import Tuple, Optional
+import subprocess
+import platform
+import pygetwindow as gw
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -193,6 +196,62 @@ calibration_points =[
     (0.1,0.9), #bottom left
     (0.9,0.9)  #bottom right
 ]
+
+# ============================================================================
+# VIRTUAL KEYBOARD CONTROL
+# ============================================================================
+
+def is_virtual_keyboard_open():
+    """ check if the virtual keyboard is open
+    """
+    try:
+        if platform.system() == "Windows":
+            windows = gw.getWindowsWithTitle("On-Screen Keyboard")
+            return len(windows) > 0
+        return False
+    except Exception as e:
+        logging.error(f"Error checking virtual keyboard state: {e}")
+        return False
+
+def open_virtual_keyboard():
+    """ Open the virtual keyboard
+    """
+    try:
+        if platform.system() == "Windows":
+            if not is_virtual_keyboard_open():
+                subprocess.Popen("osk.exe")
+                print("Virtual keyboard opened.")
+                return True
+        else:
+            print("Virtual keyboard opening not supported on this OS.")
+    except Exception as e:
+        logging.error(f"Error opening virtual keyboard: {e}")
+    return False
+
+def close_virtual_keyboard():
+    """ Close the virtual keyboard
+    """
+    try:
+        if platform.system() == "Windows":
+            windows = gw.getWindowsWithTitle("On-Screen Keyboard")
+            for window in windows:
+                window.close()
+            print("Virtual keyboard closed.")
+            return True
+        else:
+            print("Virtual keyboard closing not supported on this OS.")
+    except Exception as e:
+        logging.error(f"Error closing virtual keyboard: {e}")
+    return False
+
+def toggle_virtual_keyboard():
+    """ Toggle the virtual keyboard state
+    """
+    if is_virtual_keyboard_open():
+        return close_virtual_keyboard()
+    else:
+        return open_virtual_keyboard()
+
 
 
 def extract_eyes_with_mediapipe(frame, face_landmarks, face_bbox):
@@ -842,6 +901,187 @@ class KalmanFilter2D:
         self.covariance = np.eye(4) * 1000
         self.initialized = False 
 
+class BlinkDetection:  # ✅ Fixed typo: was BlinkDectection
+    """
+    Manages blink detection with double-blink support for virtual keyboard.
+    """
+    def __init__(self):
+        # Single blink counters
+        self.left_blink_frames = 0
+        self.right_blink_frames = 0
+        self.both_blink_frames = 0
+
+        # Double blink timing
+        self.last_both_blink_ms = 0
+        self.both_blink_count = 0
+        self.double_blink_interval_ms = 500  # ✅ Increased from 200ms to 500ms
+        self.pending_single_click = False  # ✅ NEW: Track pending single click
+        self.pending_click_time = 0  # ✅ NEW: When the pending click was registered
+
+        # Action cooldown
+        self.last_action_ms = 0
+        self.action_cooldown_ms = ACTION_COOLDOWN_MS
+
+        # Keyboard state
+        self.keyboard_open = False
+
+    def reset_blink_counters(self):
+        """Reset all blink counter frames."""
+        self.left_blink_frames = 0
+        self.right_blink_frames = 0
+        self.both_blink_frames = 0
+    
+    def can_trigger_action(self, now_ms):
+        """Check if enough time has passed since last action."""
+        return (now_ms - self.last_action_ms) >= self.action_cooldown_ms
+    
+    def update_blink_state(self, left_closed, right_closed, left_open, right_open):
+        """
+        Update blink state based on eye positions.
+        
+        Returns:
+            str: 'both', 'left', 'right', or None
+        """
+        if left_closed and right_closed:
+            self.both_blink_frames += 1
+            self.left_blink_frames = 0
+            self.right_blink_frames = 0
+            return 'both'
+        elif left_closed and right_open:
+            self.left_blink_frames += 1
+            self.right_blink_frames = 0
+            self.both_blink_frames = 0
+            return 'left'
+        elif right_closed and left_open:
+            self.right_blink_frames += 1
+            self.left_blink_frames = 0
+            self.both_blink_frames = 0
+            return 'right'
+        else:
+            # Eyes open - check if we just completed a blink
+            had_both_blink = self.both_blink_frames >= BLINK_CONSEC_FRAMES
+
+            self.reset_blink_counters()
+
+            if had_both_blink:
+                return 'both_complete'
+            return None
+        
+    def process_double_blink(self, now_ms):
+        """
+        Detect double blink for virtual keyboard toggle.
+        
+        Returns:
+            str: 'double_blink', 'wait', or 'single_click'
+        """
+        time_since_last_blink = now_ms - self.last_both_blink_ms
+
+        # First blink in sequence
+        if self.both_blink_count == 0:
+            self.both_blink_count = 1
+            self.last_both_blink_ms = now_ms
+            self.pending_single_click = True  # ✅ Mark that we might do a single click
+            self.pending_click_time = now_ms
+            return 'wait'  # ✅ Wait for potential second blink
+        
+        # Second blink within interval → DOUBLE BLINK!
+        elif time_since_last_blink < self.double_blink_interval_ms:
+            self.both_blink_count = 0  # Reset count
+            self.last_both_blink_ms = 0
+            self.pending_single_click = False  # ✅ Cancel pending single click
+            return 'double_blink'  # ✅ Trigger keyboard toggle
+        
+        # Too slow - reset and treat first blink as single
+        else:
+            self.both_blink_count = 1  # New first blink
+            self.last_both_blink_ms = now_ms
+            self.pending_single_click = True
+            self.pending_click_time = now_ms
+            return 'single_click'  # ✅ Execute the old pending click
+    
+    def check_pending_click(self, now_ms):
+        """
+        Check if we should execute a pending single click.
+        Returns True if pending click should be executed.
+        """
+        if self.pending_single_click:
+            time_since_pending = now_ms - self.pending_click_time
+            if time_since_pending >= self.double_blink_interval_ms:
+                self.pending_single_click = False
+                return True
+        return False
+    
+    def handle_blink_actions(self, blink_type, landmarks, mouse, now_ms):
+        """
+        Handle all blink actions including keyboard toggle.
+        
+        Args:
+            blink_type: 'both', 'left', 'right', or 'both_complete'
+            landmarks: Face landmarks for gaze direction
+            mouse: Mouse controller
+            now_ms: Current time in milliseconds
+        
+        Returns:
+            str: Action description or None
+        """
+        # ✅ FIRST: Check if we have a pending single click that timed out
+        if self.check_pending_click(now_ms):
+            if self.can_trigger_action(now_ms):
+                mouse.click(Button.left, 1)
+                self.last_action_ms = now_ms
+                return "left_click"
+        
+        if not self.can_trigger_action(now_ms):
+            return None
+        
+        # ======== BOTH EYES BLINK COMPLETE ========
+        if blink_type == 'both_complete':
+            # Check for double blink 
+            blink_result = self.process_double_blink(now_ms)
+            
+            if blink_result == 'double_blink':
+                # DOUBLE BLINK → Toggle keyboard
+                toggle_virtual_keyboard()
+                self.keyboard_open = is_virtual_keyboard_open()
+                self.last_action_ms = now_ms
+                print(f"[DEBUG] Double blink detected! Keyboard state: {self.keyboard_open}")
+                return "keyboard_toggle"
+            
+            elif blink_result == 'single_click':
+                # Previous blink timed out, this is a new first blink
+                # The previous blink will be executed, this one is pending
+                return None  # Wait for next action
+            
+            elif blink_result == 'wait':
+                # First blink, waiting for potential second
+                print(f"[DEBUG] First blink detected, waiting for second...")
+                return None
+        
+        # ======== RIGHT EYE BLINK ========
+        elif blink_type == 'right' and self.right_blink_frames >= BLINK_CONSEC_FRAMES:
+            mouse.click(Button.right, 1)
+            self.last_action_ms = now_ms
+            self.reset_blink_counters()
+            return "right_click"
+        
+        # ======== LEFT EYE BLINK ========
+        elif blink_type == 'left' and self.left_blink_frames >= BLINK_CONSEC_FRAMES:  # ✅ FIXED: was checking right_blink_frames
+            direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
+            if direction == "UP":
+                mouse.scroll(0, SCROLL_AMOUNT)
+                self.last_action_ms = now_ms
+                self.reset_blink_counters()
+                return "scroll_up"
+            elif direction == "DOWN":
+                mouse.scroll(0, -SCROLL_AMOUNT)
+                self.last_action_ms = now_ms
+                self.reset_blink_counters()
+                return "scroll_down"
+        
+        return None
+
+        
+
 def main():
     args = parse_args()
     
@@ -849,10 +1089,8 @@ def main():
     print("GAZE TRACKING SYSTEM")
     print("="*80)
     
-    left_blink_frames = 0
-    right_blink_frames = 0
-    both_blink_frames = 0
-    last_blink_ms = 0 
+    # NEW: Initialize blink state manager
+    blink_state =  BlinkDetection()
     
     # Initialize components
     print("\nInitializing model...")
@@ -1068,69 +1306,57 @@ def main():
                     # RELATIVE movement
                     mouse.move(move_x, move_y)
             
+           # ============================================================================
+            # NEW: OPTIMIZED BLINK DETECTION WITH VIRTUAL KEYBOARD
             # ============================================================================
-            # Blink detection
-            # ============================================================================
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            start_time = time.time()
-            results = face_mesh.process(image_rgb)
-            time_calculator(start_time, "Face mesh processing")
-            
-            if results.multi_face_landmarks:
-                face_landmarks = results.multi_face_landmarks[0]
-                h, w, _ = frame.shape
-                landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
-                left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
-                right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
+            # Only run face mesh every 2 frames for performance
+            if frame_count % 2 == 0:
+                start_time = time.time()
+                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = face_mesh.process(image_rgb)
+                time_calculator(start_time, "Face mesh processing")
                 
-                left_closed = left_ear < EAR_CLOSE_THRESHOLD
-                right_closed = right_ear < EAR_CLOSE_THRESHOLD
-                left_open = left_ear > EAR_OPEN_THRESHOLD
-                right_open = right_ear > EAR_OPEN_THRESHOLD
-                
-                if left_closed and right_closed:
-                    both_blink_frames += 1
-                    left_blink_frames = 0
-                    right_blink_frames = 0
-                elif left_closed and right_open:
-                    left_blink_frames += 1
-                    right_blink_frames = 0
-                    both_blink_frames = 0
-                elif right_closed and left_open:
-                    right_blink_frames += 1
-                    left_blink_frames = 0
-                    both_blink_frames = 0
-                else:
-                    left_blink_frames = 0
-                    right_blink_frames = 0
-                    both_blink_frames = 0
-                
-                now = now_ms()
-                if now - last_blink_ms >= ACTION_COOLDOWN_MS:
-                    if both_blink_frames >= 2:
-                        mouse.click(Button.left, 1)
-                        last_blink_ms = now
-                        both_blink_frames = 0
+                if results.multi_face_landmarks:
+                    face_landmarks = results.multi_face_landmarks[0]
+                    h, w, _ = frame.shape
+                    landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
+                    
+                    # Calculate eye aspect ratios
+                    left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
+                    right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
+                    
+                    # Determine eye states
+                    left_closed = left_ear < EAR_CLOSE_THRESHOLD
+                    right_closed = right_ear < EAR_CLOSE_THRESHOLD
+                    left_open = left_ear > EAR_OPEN_THRESHOLD
+                    right_open = right_ear > EAR_OPEN_THRESHOLD
+                    
+                    # Update blink state
+                    blink_type = blink_state.update_blink_state(left_closed, right_closed, left_open, right_open)
+                    
+                    # Process actions
+                    now = now_ms()
+                    action = blink_state.handle_blink_actions(blink_type, landmarks, mouse, now)
+                    
+                    # Visual feedback
+                    if action == "keyboard_toggle":
+                        print("⌨️  Virtual keyboard toggled")
+                    elif action == "left_click":
                         print("✓ Left click")
-                    
-                    elif right_blink_frames >= 2:
-                        mouse.click(Button.right, 1)
-                        last_blink_ms = now
-                        right_blink_frames = 0
+                    elif action == "right_click":
                         print("✓ Right click")
+                    elif action == "scroll_up":
+                        print("↑ Scroll up")
+                    elif action == "scroll_down":
+                        print("↓ Scroll down")
                     
-                    elif left_blink_frames >= 2:
-                        direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
-                        if direction == "UP":
-                            mouse.scroll(0, SCROLL_AMOUNT)
-                            print(f"✓ Scroll up")
-                        elif direction == "DOWN":
-                            mouse.scroll(0, -SCROLL_AMOUNT)
-                            print(f"✓ Scroll down")
-                        last_blink_ms = now
-                        left_blink_frames = 0
-            
-            time_calculator(start_time, "Blink detection")
+                    # Display blink state on frame (optional debug)
+                    if left_closed or right_closed:
+                        blink_text = f"L:{left_ear:.2f} R:{right_ear:.2f}"
+                        cv2.putText(frame, blink_text, (10, 170), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                
+                time_calculator(start_time, "Blink detection")
         
         # Display FPS and info on frame
         fps = fps_counter.get_fps()  
@@ -1155,6 +1381,19 @@ def main():
             writer.write(frame)
         
         cv2.imshow("Gaze Tracking", frame)
+
+        # Show keyboard status
+        if blink_state.keyboard_open:
+            cv2.putText(frame, "Keyboard: ON", (10, 170), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        else:
+            cv2.putText(frame, "Keyboard: OFF", (10, 170), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 1)
+
+        # Show blink counts for debugging
+        debug_text = f"Both:{blink_state.both_blink_frames} L:{blink_state.left_blink_frames} R:{blink_state.right_blink_frames}"
+        cv2.putText(frame, debug_text, (10, 200), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         key = cv2.waitKey(1)
         if key == ord('q'):
