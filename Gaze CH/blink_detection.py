@@ -21,6 +21,8 @@ EAR_OPEN_THRESHOLD = 0.25   # Eye Aspect Ratio threshold to indicate open eyes
 BLINK_CONSEC_FRAMES = 5     # Number of consecutive frames the eye must be below the threshold
 ACTION_COOLDOWN_MS = 300    # Cooldown period after an action is triggered
 SCROLL_AMOUNT = 250         # Amount to scroll on each blink action
+num_of_clicks = 1           # Number of clicks for left click action
+
 
 # MediaPipe eye indices
 LEFT_EYE = [362, 385, 387, 263, 373, 380]
@@ -303,11 +305,12 @@ class BlinkDetection:
         # FIRST: Check if we have a pending single click that timed out
         if self.check_pending_click(now_ms):
             if self.can_trigger_action(now_ms):
-                mouse.click(Button.left, 1)
+                mouse.click(Button.left, num_of_clicks )  # 1 distinguish from double blink   number of clicks 
                 self.last_action_ms = now_ms
-                return "left_click"
+                return "left_click" 
         
         if not self.can_trigger_action(now_ms):
+
             return None
         
         # ======== BOTH EYES BLINK COMPLETE ========
@@ -370,11 +373,6 @@ class FPSCounter:
             return 0.0
         avg_frame_time = sum(self.frame_times) / len(self.frame_times)
         return 1.0 / avg_frame_time if avg_frame_time > 0 else 0.0
-
-
-
-
-
 
 
 
@@ -457,11 +455,11 @@ class ScrollModeDetector:
 
 
 
-
-
 def main():
+    global num_of_clicks
+
     parser = argparse.ArgumentParser(description="Blink Detection Test")
-    parser.add_argument("--source", type=str, default="1", help="Camera index or video path")
+    parser.add_argument("--source", type=str, default="0", help="Camera index or video path")
     args = parser.parse_args()
     
     print("\n" + "="*80)
@@ -559,10 +557,14 @@ def main():
                 # Visual feedback
                 if action == "keyboard_toggle":
                     print("⌨️  Virtual keyboard toggled")
+                    num_of_clicks  = 1
                 elif action == "left_click":
                     print("✓ Left click")
+                    num_of_clicks = 2
                 elif action == "right_click":
                     print("✓ Right click")
+                    num_of_clicks  = 1
+
                 elif action == "scroll_up":
                     print("↑ Scroll up")
                 elif action == "scroll_down":
