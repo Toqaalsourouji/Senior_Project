@@ -1,7 +1,3 @@
-"""
-Standalone Blink Detection Test
-Tests blink detection without gaze tracking
-"""
 import os
 import sys
 import ctypes
@@ -14,10 +10,12 @@ import subprocess
 import platform
 import pygetwindow as gw
 import argparse
+import os
+import pyautogui 
+from collections import deque
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
+
+
 EAR_CLOSE_THRESHOLD = 0.20  # Eye Aspect Ratio threshold to indicate closed eyes
 EAR_OPEN_THRESHOLD = 0.25   # Eye Aspect Ratio threshold to indicate open eyes
 BLINK_CONSEC_FRAMES = 5     # Number of consecutive frames the eye must be below the threshold
@@ -28,9 +26,7 @@ SCROLL_AMOUNT = 250         # Amount to scroll on each blink action
 LEFT_EYE = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE = [33, 160, 158, 133, 153, 144]
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
+
 
 def is_admin():
     """Check if the script is running with admin privileges."""
@@ -106,17 +102,9 @@ def right_eye_vertical_gaze(landmarks, right_eye_indices):
     else:
         return "CENTER"
 
-# ============================================================================
-# VIRTUAL KEYBOARD CONTROL
-# ============================================================================
 
-# ============================================================================
-# ALTERNATIVE VIRTUAL KEYBOARD (NO ADMIN REQUIRED)
-# ============================================================================
 
-import os
 
-import pyautogui  # Add this import at the top
 
 def open_virtual_keyboard():
     """Open Windows Touch Keyboard using keyboard shortcut Ctrl+Win+O."""
@@ -125,12 +113,12 @@ def open_virtual_keyboard():
             # Use keyboard shortcut: Ctrl + Windows + O
             pyautogui.hotkey('ctrl', 'win', 'o')
             time.sleep(0.5)  # Give keyboard time to open
-            print("✓ Touch keyboard opened (Ctrl+Win+O).")
+            print("Touch keyboard opened (Ctrl+Win+O).")
             return True
         else:
-            print("⚠ Virtual keyboard opening not supported on this OS.")
+            print("Virtual keyboard opening not supported on this OS.")
     except Exception as e:
-        print(f"✗ Error opening touch keyboard: {e}")
+        print(f"Error opening touch keyboard: {e}")
     return False
 
 def close_virtual_keyboard():
@@ -140,12 +128,12 @@ def close_virtual_keyboard():
             # Ctrl + Win + O toggles the keyboard
             pyautogui.hotkey('ctrl', 'win', 'o')
             time.sleep(0.3)
-            print("✓ Touch keyboard closed (Ctrl+Win+O).")
+            print("Touch keyboard closed (Ctrl+Win+O).")
             return True
         else:
-            print("⚠ Virtual keyboard closing not supported on this OS.")
+            print("Virtual keyboard closing not supported on this OS.")
     except Exception as e:
-        print(f"✗ Error closing touch keyboard: {e}")
+        print(f"Error closing touch keyboard: {e}")
     return False
 
 def is_virtual_keyboard_open():
@@ -180,13 +168,14 @@ def toggle_virtual_keyboard():
             print(f"✓ Touch keyboard {status}.")
             return True
         else:
-            print("⚠ Virtual keyboard not supported on this OS.")
+            print("Virtual keyboard not supported on this OS.")
     except Exception as e:
-        print(f"✗ Error toggling keyboard: {e}")
+        print(f"Error toggling keyboard: {e}")
     return False
-# ============================================================================
-# BLINK DETECTION CLASS
-# ============================================================================
+
+
+
+
 
 class BlinkDetection:
     """
@@ -359,9 +348,8 @@ class BlinkDetection:
         
         return None
 
-# ============================================================================
-# FPS COUNTER
-# ============================================================================
+
+
 
 class FPSCounter:
     def __init__(self, buffer_size=30):
@@ -383,13 +371,97 @@ class FPSCounter:
         avg_frame_time = sum(self.frame_times) / len(self.frame_times)
         return 1.0 / avg_frame_time if avg_frame_time > 0 else 0.0
 
-# ============================================================================
-# MAIN TEST FUNCTION
-# ============================================================================
+
+
+
+
+
+
+
+
+
+def eyebrow_eye_distance(landmarks, eyebrow_idxs, eye_idxs):
+    eye_cx, eye_cy = np.mean([landmarks[i][0] for i in eye_idxs]), np.mean([landmarks[i][1] for i in eye_idxs])
+    brow_cx, brow_cy = np.mean([landmarks[i][0] for i in eyebrow_idxs]), np.mean([landmarks[i][1] for i in eyebrow_idxs])
+    return eye_cy - brow_cy  # positive when brow is higher
+
+#we are trying to measure how much the eybrows move upwards relative to the eyes frame by frame
+#bec Mediapipe gives you the 2D pixel coordinates of landmarks
+#the system sees the face as a set of points in a flat (x, y) space where each pixel represents a small distance on the screen
+#so abs_thresh is the literal image pixel representuing how far a landmark moved
+#in the frame and the ratio thresh is the relative movement comapred to the normal 
+#distance btw the eye and the eyebrow. 
+#we are using two thesh to compensate for diff faces and distance from camera
+
+class ScrollModeDetector:
+    
+    def __init__(self):
+        self.prev_left_dist = None
+        self.prev_right_dist = None
+        self.scroll_mode = False
+        self.last_toggle_ms = 0
+        self.cooldown_ms = 800  # ms between toggles
+        self.left_history = deque(maxlen=5)
+        self.right_history = deque(maxlen=5)
+        self.abs_thresh = 6.0        # minimum pixel change to consider movement
+        self.rel_thresh_ratio = 0.15 # 15% rise relative to baseline
+        
+    def update(self, landmarks, now_ms):
+        #for each frame the left and right sides of the face we calc 
+        #the vertical gap (in pixles) btw the eye center and the eyebrow center
+        #and we expect an upward distance increse +-15 px
+        left_dist = eyebrow_eye_distance(landmarks, [70, 63, 105], LEFT_EYE)
+        right_dist = eyebrow_eye_distance(landmarks, [300, 293, 334], RIGHT_EYE)
+
+        #on first frame, initialize baseline
+        if self.prev_left_dist is None:
+            self.prev_left_dist, self.prev_right_dist = left_dist, right_dist
+            self.left_history.extend([left_dist] * 5)
+            self.right_history.extend([right_dist] * 5)
+            print(f"[INIT] Baseline set. Left: {left_dist:.2f}, Right: {right_dist:.2f}")
+            return self.scroll_mode
+
+        
+        self.left_history.append(left_dist)
+        self.right_history.append(right_dist)
+        smooth_left = np.mean(self.left_history)
+        smooth_right = np.mean(self.right_history)
+        
+        #change is calc by averaing 5 frames and then comapring the new avg to the prev avg 
+        #change = how many pixels your eyebrows moved upward since the last frame 
+        #+ means motion up 
+        change = ((left_dist - self.prev_left_dist) +
+                  (right_dist - self.prev_right_dist)) / 2
+        
+        #for the relative ratio, the baseline is the neutral eyebrow and the rel_change 
+        #is the change/baseline and this ratio is unit free and adjusts for face scale and camera distance
+        
+        baseline = (self.prev_left_dist + self.prev_right_dist) / 2
+        rel_change = change / baseline if baseline != 0 else 0
+
+        # Print live eyebrow distances and changes
+        # print(f"[DEBUG] LeftDist={left_dist:.2f}, RightDist={right_dist:.2f}, Δ={change:.2f}")
+
+        #detect significant upward eyebrow raise
+        if (change > self.abs_thresh or rel_change > self.rel_thresh_ratio) and \
+           (now_ms - self.last_toggle_ms) > self.cooldown_ms:
+            self.scroll_mode = not self.scroll_mode
+            self.last_toggle_ms = now_ms
+            print(f"Scroll mode toggled: {'ON' if self.scroll_mode else 'OFF'}")
+
+        # Update stored distances
+        self.prev_left_dist, self.prev_right_dist = smooth_left, smooth_right
+        return self.scroll_mode
+
+
+
+
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="Blink Detection Test")
-    parser.add_argument("--source", type=str, default="0", help="Camera index or video path")
+    parser.add_argument("--source", type=str, default="1", help="Camera index or video path")
     args = parser.parse_args()
     
     print("\n" + "="*80)
@@ -438,6 +510,9 @@ def main():
     
     print("\n✓ Starting blink detection...\n")
     
+    
+    scroll_detector = ScrollModeDetector() #instantiate scroll mode detector
+
     # Main loop
     while cap.isOpened():
         ret, frame = cap.read()
@@ -457,7 +532,7 @@ def main():
                 face_landmarks = results.multi_face_landmarks[0]
                 h, w, _ = frame.shape
                 landmarks = [(int(pt.x * w), int(pt.y * h)) for pt in face_landmarks.landmark]
-                
+
                 # Calculate eye aspect ratios
                 left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
                 right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
@@ -474,6 +549,12 @@ def main():
                 # Process actions
                 now = now_ms()
                 action = blink_state.handle_blink_actions(blink_type, landmarks, mouse, now)
+                scroll_mode_active = scroll_detector.update(landmarks, now)
+                
+                color = (0, 255, 0) if scroll_mode_active else (0, 0, 255)
+                cv2.putText(frame, f"Scroll Mode: {'ON' if scroll_mode_active else 'OFF'}",
+                    (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
                 
                 # Visual feedback
                 if action == "keyboard_toggle":
