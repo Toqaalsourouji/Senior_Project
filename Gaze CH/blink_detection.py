@@ -2,7 +2,9 @@
 Standalone Blink Detection Test
 Tests blink detection without gaze tracking
 """
-
+import os
+import sys
+import ctypes
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -18,7 +20,7 @@ import argparse
 # ============================================================================
 EAR_CLOSE_THRESHOLD = 0.20  # Eye Aspect Ratio threshold to indicate closed eyes
 EAR_OPEN_THRESHOLD = 0.25   # Eye Aspect Ratio threshold to indicate open eyes
-BLINK_CONSEC_FRAMES = 2     # Number of consecutive frames the eye must be below the threshold
+BLINK_CONSEC_FRAMES = 5     # Number of consecutive frames the eye must be below the threshold
 ACTION_COOLDOWN_MS = 300    # Cooldown period after an action is triggered
 SCROLL_AMOUNT = 250         # Amount to scroll on each blink action
 
@@ -29,6 +31,22 @@ RIGHT_EYE = [33, 160, 158, 133, 153, 144]
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def is_admin():
+    """Check if the script is running with admin privileges."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    """Rerun the script with admin privileges."""
+    if not is_admin():
+        print("⚠ Restarting with admin privileges...")
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+        sys.exit()
+
 
 def now_ms():
     """Current time in milliseconds."""
@@ -92,53 +110,80 @@ def right_eye_vertical_gaze(landmarks, right_eye_indices):
 # VIRTUAL KEYBOARD CONTROL
 # ============================================================================
 
-def is_virtual_keyboard_open():
-    """Check if the virtual keyboard is open."""
-    try:
-        if platform.system() == "Windows":
-            windows = gw.getWindowsWithTitle("On-Screen Keyboard")
-            return len(windows) > 0
-        return False
-    except Exception as e:
-        print(f"Error checking virtual keyboard state: {e}")
-        return False
+# ============================================================================
+# ALTERNATIVE VIRTUAL KEYBOARD (NO ADMIN REQUIRED)
+# ============================================================================
+
+import os
+
+import pyautogui  # Add this import at the top
 
 def open_virtual_keyboard():
-    """Open the virtual keyboard."""
+    """Open Windows Touch Keyboard using keyboard shortcut Ctrl+Win+O."""
     try:
         if platform.system() == "Windows":
-            if not is_virtual_keyboard_open():
-                subprocess.Popen("osk.exe")
-                print("✓ Virtual keyboard opened.")
-                return True
+            # Use keyboard shortcut: Ctrl + Windows + O
+            pyautogui.hotkey('ctrl', 'win', 'o')
+            time.sleep(0.5)  # Give keyboard time to open
+            print("✓ Touch keyboard opened (Ctrl+Win+O).")
+            return True
         else:
             print("⚠ Virtual keyboard opening not supported on this OS.")
     except Exception as e:
-        print(f"✗ Error opening virtual keyboard: {e}")
+        print(f"✗ Error opening touch keyboard: {e}")
     return False
 
 def close_virtual_keyboard():
-    """Close the virtual keyboard."""
+    """Close Windows Touch Keyboard using the same shortcut."""
     try:
         if platform.system() == "Windows":
-            windows = gw.getWindowsWithTitle("On-Screen Keyboard")
-            for window in windows:
-                window.close()
-            print("✓ Virtual keyboard closed.")
+            # Ctrl + Win + O toggles the keyboard
+            pyautogui.hotkey('ctrl', 'win', 'o')
+            time.sleep(0.3)
+            print("✓ Touch keyboard closed (Ctrl+Win+O).")
             return True
         else:
             print("⚠ Virtual keyboard closing not supported on this OS.")
     except Exception as e:
-        print(f"✗ Error closing virtual keyboard: {e}")
+        print(f"✗ Error closing touch keyboard: {e}")
     return False
 
-def toggle_virtual_keyboard():
-    """Toggle the virtual keyboard state."""
-    if is_virtual_keyboard_open():
-        return close_virtual_keyboard()
-    else:
-        return open_virtual_keyboard()
+def is_virtual_keyboard_open():
+    """
+    Check if the touch keyboard is open.
+    Note: Detecting if TabTip is open is tricky without admin rights.
+    This implementation assumes toggle behavior.
+    """
+    try:
+        if platform.system() == "Windows":
+            # Check for TabTip or TextInputHost process (Windows 11)
+            import psutil
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] in ['TabTip.exe', 'TextInputHost.exe']:
+                    return True
+        return False
+    except:
+        # If we can't detect, assume it follows toggle behavior
+        return False
 
+def toggle_virtual_keyboard():
+    """Toggle the touch keyboard using Ctrl+Win+O."""
+    try:
+        if platform.system() == "Windows":
+            # Ctrl + Win + O is a toggle shortcut
+            pyautogui.hotkey('ctrl', 'win', 'o')
+            time.sleep(0.3)
+            
+            # Try to detect current state
+            is_open = is_virtual_keyboard_open()
+            status = "opened" if is_open else "toggled"
+            print(f"✓ Touch keyboard {status}.")
+            return True
+        else:
+            print("⚠ Virtual keyboard not supported on this OS.")
+    except Exception as e:
+        print(f"✗ Error toggling keyboard: {e}")
+    return False
 # ============================================================================
 # BLINK DETECTION CLASS
 # ============================================================================
@@ -280,7 +325,7 @@ class BlinkDetection:
         if blink_type == 'both_complete':
             blink_result = self.process_double_blink(now_ms)
             
-            if blink_result == 'double_blink':
+            if blink_result == 'both_complete':
                 # DOUBLE BLINK → Toggle keyboard
                 toggle_virtual_keyboard()
                 self.keyboard_open = is_virtual_keyboard_open()
@@ -306,17 +351,11 @@ class BlinkDetection:
         
         # ======== LEFT EYE BLINK ========
         elif blink_type == 'left' and self.left_blink_frames >= BLINK_CONSEC_FRAMES:
-            direction = right_eye_vertical_gaze(landmarks, RIGHT_EYE)
-            if direction == "UP":
-                mouse.scroll(0, SCROLL_AMOUNT)
-                self.last_action_ms = now_ms
-                self.reset_blink_counters()
-                return "scroll_up"
-            elif direction == "DOWN":
-                mouse.scroll(0, -SCROLL_AMOUNT)
-                self.last_action_ms = now_ms
-                self.reset_blink_counters()
-                return "scroll_down"
+            toggle_virtual_keyboard()
+            self.keyboard_open = is_virtual_keyboard_open()
+            self.last_action_ms = now_ms
+            print(f"[DEBUG] Double blink detected! Keyboard state: {self.keyboard_open}")
+            return "keyboard_toggle"
         
         return None
 
