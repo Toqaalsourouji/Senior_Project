@@ -1404,3 +1404,5 @@ if __name__ == "__main__":
 #Visualizatiion time: 0.00000 ms
 #Frame processing Total time: 100.12436-120 ms
 #Handle inputs time: 2.65932 ms
+
+#Frame skipping doubles it, so 18

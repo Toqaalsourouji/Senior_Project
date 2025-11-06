@@ -128,6 +128,7 @@ class UnifiedEyeTracker:
         Process gaze detection on detected face
         Returns: (direction, confidence, pitch, yaw)
         """
+        start_time = time.time()
         x_min, y_min, x_max, y_max = map(int, bbox[:4])
         x_min = max(0, x_min)
         y_min = max(0, y_min)
@@ -140,15 +141,17 @@ class UnifiedEyeTracker:
         
         # Estimate gaze angles
         pitch, yaw = self.gaze_model.estimate(face)
-        
+        time_calculator(start_time, "Model inference")
+        start_time = time.time()
         # Detect direction
         direction, confidence = self.gaze_detector.detect_direction(pitch, yaw)
-        
+        time_calculator(start_time, "Direction detection")
         # Apply temporal filter
+        start_time = time.time()
         filtered_dir, filtered_conf = self.gaze_filter.update(
             direction, confidence, pitch, yaw
         )
-        
+        time_calculator(start_time, "Filter")
         return filtered_dir, filtered_conf, pitch, yaw
     
     def process_blink(self, frame, landmarks):
@@ -203,7 +206,7 @@ class UnifiedEyeTracker:
         scroll_mode = False
         left_ear = 0.0
         right_ear = 0.0
-        
+        start_time = time.time()
         # Process every N frames for performance
         if self.frame_count % self.gaze_settings.FRAME_SKIP == 0:
             # GAZE DETECTION (using RetinaFace)
@@ -218,13 +221,16 @@ class UnifiedEyeTracker:
                     bboxes = bboxes / self.gaze_settings.FACE_DETECTION_SCALE
             else:
                 bboxes, _ = self.face_detector.detect(frame)
+            time_calculator(start_time, "Face detect")
             
             if len(bboxes) > 0:
+                start_time = time.time()
                 bbox = bboxes[0]
                 self.last_bbox = bbox
                 gaze_result = self.process_gaze(frame, bbox)
                 
                 if gaze_result:
+                    start_time = time.time()
                     direction, confidence, pitch, yaw = gaze_result
                     
                     # Update state
@@ -233,12 +239,15 @@ class UnifiedEyeTracker:
                         self.current_confidence = confidence
                         self.current_pitch = pitch
                         self.current_yaw = yaw
-                    
+                    time_calculator(start_time, "Data extraction")
                     # Move mouse based on gaze
+                    start_time = time.time()
                     if self.mouse_controller.is_active and \
                        confidence > self.gaze_settings.CONFIDENCE_THRESHOLD:
                         self.mouse_controller.move_mouse(direction, confidence)
+                        time_calculator(start_time, "Move mouse")
         
+        start_time = time.time()
         # BLINK DETECTION (using MediaPipe - runs every frame for responsiveness)
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(image_rgb)
@@ -249,12 +258,13 @@ class UnifiedEyeTracker:
             
             if blink_result:
                 action, scroll_mode, left_ear, right_ear = blink_result
-        
+        time_calculator(start_time, "Blinking")
         # Draw visualization
+        start_time = time.time()
         self.draw_visualization(
             frame, fps, gaze_result, blink_result, scroll_mode
         )
-        
+        time_calculator(start_time, "visualization")
         return frame
     
     def draw_visualization(self, frame, fps, gaze_result, blink_result, scroll_mode):
@@ -427,17 +437,24 @@ class UnifiedEyeTracker:
         
         try:
             while cap.isOpened():
+                start_time = time.time()
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
+                time_calculator(start_time, "Cam capture")
                 # Process frame
+                start_time = time.time()
                 processed_frame = self.process_frame(frame)
-                
+                time_calculator(start_time, "Frame processing Total")
+                start_time = time.time()
                 # Display
                 cv2.imshow("Unified Eye Tracking Control", processed_frame)
-                
+                time_calculator(start_time, "Show image CV")
+
+
+
                 # Handle keyboard input
+                start_time = time.time()
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     print("\n✓ Shutting down...")
@@ -468,6 +485,7 @@ class UnifiedEyeTracker:
                     self.gaze_settings.SHOW_DEBUG_INFO = \
                         not self.gaze_settings.SHOW_DEBUG_INFO
                     print(f"Debug: {'ON' if self.gaze_settings.SHOW_DEBUG_INFO else 'OFF'}")
+                time_calculator(start_time, "Handle inputs")
         
         finally:
             self.mouse_controller.stop()
@@ -477,6 +495,12 @@ class UnifiedEyeTracker:
             print(f"Total frames processed: {self.frame_count}")
 
 
+# Time function to calculate time of each step
+def time_calculator(start_inf, label=""):
+    return #remvoe the line if you want timings
+    end_inf = time.time()
+    calc_time = end_inf - start_inf
+    print(f"{label} time: {calc_time*1000:.5f} ms")
 def main():
     parser = argparse.ArgumentParser(
         description="Unified Eye Tracking Control System"
@@ -514,3 +538,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# command to run: 
+# python driver.py --model mobileone_s0_gaze.onnx --speed 20 --delay 0.3
+
+#Show image CV time: 0.00000 ms
+#Handle inputs time: 8.52394 ms
+#Cam capture time: 8.45599 ms
+#Face detect time: 84.22136 ms (avg is 60 tho)
+#Model inference time: 26.95608 ms (avg is 30)
+#Direction detection time: 0.99802 ms (rarly 10 ms)
+#Filter time: 0.00000 ms
+#Data extraction time: 0.00000 ms
+#Move mouse time: 0.00000 ms (though i didn't move the mouse any time)
+#Blinking time: 8.87418 ms ) (avg 6)
+#visualization time: 0.99778 ms (sometimes 14ms but not common)
+#Frame processing Total time: 122.04742 ms (avg is 100ms)
+
+#Frame skipping doubles it, so 18
+
