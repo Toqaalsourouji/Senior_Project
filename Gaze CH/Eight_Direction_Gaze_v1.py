@@ -1129,19 +1129,18 @@ class AccurateGazeApp:
         # Calibration state
         self.calibration_sequence = list(GazeDirection)
         self.calibration_index = 0
-        
+    
     def run(self):
         """Main application loop"""
         cap = cv2.VideoCapture(self.settings.VIDEO_SOURCE)
         if not cap.isOpened():
             raise IOError(f"Failed to open video source")
-        
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FPS, 30)
         
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))       
+
         print("\n" + "="*60)
         print("ACCURATE 8-DIRECTION GAZE DETECTION (HYBRID)")
         print("="*60)
@@ -1157,20 +1156,23 @@ class AccurateGazeApp:
         
         try:
             while cap.isOpened():
+                start_time = time.time()
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
+                time_calculator(start_time, "Cam capture & details")
                 self.frame_count += 1
                 
                 # Calculate FPS
+                start_time = time.time()
                 current_time = time.time()
                 fps = 1.0 / (current_time - self.last_time)
                 self.fps_history.append(fps)
                 self.last_time = current_time
                 avg_fps = np.mean(self.fps_history)
-                
+                time_calculator(start_time, "FPS CALC")
                 # Process frame
+                start_time = time.time()
                 if self.frame_count % self.settings.FRAME_SKIP == 0:
                     self.process_frame(frame, avg_fps)
                 elif self.last_bbox is not None:
@@ -1182,9 +1184,11 @@ class AccurateGazeApp:
                         pitch, yaw, avg_fps, self.mouse_controller.is_active,
                         self.detector.calibration.is_calibrating
                     )
-                
+                time_calculator(start_time, "Frame processing Total")
+                start_time = time.time()
                 cv2.imshow("Accurate Gaze Control", frame)
-                
+                time_calculator(start_time, "Show image CV")
+                start_time = time.time()
                 # Handle input
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
@@ -1223,7 +1227,7 @@ class AccurateGazeApp:
                 elif key == ord('a'):
                     self.settings.SHOW_ANGLE_VALUES = not self.settings.SHOW_ANGLE_VALUES
                     print(f"Angle display: {'ON' if self.settings.SHOW_ANGLE_VALUES else 'OFF'}")
-                    
+                time_calculator(start_time, "Handle inputs")
         finally:
             self.mouse_controller.stop()
             cap.release()
@@ -1235,6 +1239,7 @@ class AccurateGazeApp:
     def process_frame(self, frame: np.ndarray, fps: float):
         """Process single frame"""
         # Detect face
+        start_time = time.time()
         if self.settings.FACE_DETECTION_SCALE < 1.0:
             small = cv2.resize(frame, None, 
                              fx=self.settings.FACE_DETECTION_SCALE,
@@ -1247,11 +1252,11 @@ class AccurateGazeApp:
         
         if len(bboxes) == 0:
             return
-        
         bbox = bboxes[0]
         self.last_bbox = bbox
-        
+        time_calculator(start_time, "Face detect")
         # Extract face
+        start_time = time.time()
         x_min, y_min, x_max, y_max = map(int, bbox[:4])
         x_min = max(0, x_min)
         y_min = max(0, y_min)
@@ -1261,34 +1266,41 @@ class AccurateGazeApp:
         face = frame[y_min:y_max, x_min:x_max]
         if face.size == 0:
             return
-        
+        time_calculator(start_time, "Extract face")
         # Estimate gaze
+        start_time = time.time()
         pitch, yaw = self.model.estimate(face)
-        
+        time_calculator(start_time, "Model inference")
         # Detect direction
+        start_time = time.time()
         direction, confidence = self.detector.detect_direction(pitch, yaw)
-        
+        time_calculator(start_time, "Direction detection")
         # Apply temporal filter
+        start_time = time.time()
         filtered_dir, filtered_conf = self.filter.update(direction, confidence, pitch, yaw)
         
         # Update stats
         self.stats[filtered_dir] += 1
         self.last_direction = filtered_dir
-        
+        time_calculator(start_time, "Filter")
+        start_time = time.time()
         # Display angle values if enabled
         if self.settings.SHOW_ANGLE_VALUES and self.frame_count % 10 == 0:
             print(f"Pitch: {pitch:+6.1f}° | Yaw: {yaw:+6.1f}° | Dir: {filtered_dir.value:10s} | Conf: {filtered_conf:.2f}")
-        
+        time_calculator(start_time, "display angles")
+        start_time = time.time()
         # Control mouse
         if self.mouse_controller.is_active and filtered_conf > self.settings.CONFIDENCE_THRESHOLD:
             self.mouse_controller.move_mouse(filtered_dir, filtered_conf)
-        
+        time_calculator(start_time, "Move mouse")
         # Visualize
+        start_time = time.time()
         self.visualizer.draw_overlay(
             frame, bbox, filtered_dir, filtered_conf,
             pitch, yaw, fps, self.mouse_controller.is_active,
             self.detector.calibration.is_calibrating
         )
+        time_calculator(start_time, "Visualizatiion")
     
     def start_calibration(self):
         """Start calibration sequence"""
@@ -1316,6 +1328,12 @@ class AccurateGazeApp:
         print("="*60)
 
 
+# Time function to calculate time of each step
+def time_calculator(start_inf, label=""):
+    return #remvoe the line if you want timings
+    end_inf = time.time()
+    calc_time = end_inf - start_inf
+    print(f"{label} time: {calc_time*1000:.5f} ms")
 # ==================== MAIN ====================
 def main():
     import argparse
@@ -1367,3 +1385,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# command to run: 
+# python Eight_Direction_Gaze_v1.py --model mobileone_s0_gaze.onnx --calibrate --debug --kalman --delay 0.3 --hold-time 0.15 --center-required
+
+
+
+#Cam capture & details time: 7.97915 ms
+#FPS CALC time: 0.00000 ms
+#Face detect time: 76.27249 ms
+#Extract face time: 0.00000 ms
+#Model inference time: 19.94634 ms though most of the time it is 25, so this is mostly an anamoly, sometimes it goes up to 32 as well
+#Direction detection time: 0.99730 ms
+#Filter time: 0.00000 ms
+#display angles time: 0.00000 ms
+#Move mouse time: 0.00000 ms
+#Visualizatiion time: 0.00000 ms
+#Frame processing Total time: 100.12436-120 ms
+#Handle inputs time: 2.65932 ms
