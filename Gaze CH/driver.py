@@ -544,7 +544,7 @@ if __name__ == "__main__":
 # python driver.py --model mobileone_s0_gaze.onnx --speed 20 --delay 0.3
 
 #Show image CV time: 0.00000 ms
-#Handle inputs time: 8.52394 ms
+#Handle inputs time: 8.52394 ms (sometimes 1-2ms)
 #Cam capture time: 8.45599 ms
 #Face detect time: 84.22136 ms (avg is 60 tho)
 #Model inference time: 26.95608 ms (avg is 30)
@@ -555,6 +555,6 @@ if __name__ == "__main__":
 #Blinking time: 8.87418 ms ) (avg 6)
 #visualization time: 0.99778 ms (sometimes 14ms but not common)
 #Frame processing Total time: 122.04742 ms (avg is 100ms)
-
-#Frame skipping doubles it, so 18
+#total: 100+8+8+8+1=125 ms, worst case is 8.5+9+122+6+14=160 ms
+#Frame skipping doubles it, so 12.5
 
