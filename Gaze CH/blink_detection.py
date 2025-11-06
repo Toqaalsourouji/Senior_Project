@@ -313,7 +313,7 @@ class BlinkDetection:
 
             return None
         
-        # ======== BOTH EYES BLINK COMPLETE ========
+        #BOTH EYES BLINK COMPLETE
         if blink_type == 'both_complete':
             blink_result = self.process_double_blink(now_ms)
             
@@ -334,14 +334,14 @@ class BlinkDetection:
                 print(f"[DEBUG] First blink detected, waiting for second...")
                 return None
         
-        # ======== RIGHT EYE BLINK ========
+        #  RIGHT EYE BLINK 
         elif blink_type == 'right' and self.right_blink_frames >= BLINK_CONSEC_FRAMES:
             mouse.click(Button.right, 1)
             self.last_action_ms = now_ms
             self.reset_blink_counters()
             return "right_click"
         
-        # ======== LEFT EYE BLINK ========
+        #LEFT EYE BLINK
         elif blink_type == 'left' and self.left_blink_frames >= BLINK_CONSEC_FRAMES:
             toggle_virtual_keyboard()
             self.keyboard_open = is_virtual_keyboard_open()
@@ -378,6 +378,12 @@ class FPSCounter:
 
 
 
+
+
+
+
+
+
 def eyebrow_eye_distance(landmarks, eyebrow_idxs, eye_idxs):
     eye_cx, eye_cy = np.mean([landmarks[i][0] for i in eye_idxs]), np.mean([landmarks[i][1] for i in eye_idxs])
     brow_cx, brow_cy = np.mean([landmarks[i][0] for i in eyebrow_idxs]), np.mean([landmarks[i][1] for i in eyebrow_idxs])
@@ -401,10 +407,18 @@ class ScrollModeDetector:
         self.cooldown_ms = 800  # ms between toggles
         self.left_history = deque(maxlen=5)
         self.right_history = deque(maxlen=5)
-        self.abs_thresh = 6.0        # minimum pixel change to consider movement
+        self.abs_thresh = 4.0        # minimum pixel change to consider movement
         self.rel_thresh_ratio = 0.15 # 15% rise relative to baseline
+        self.raise_frames = 0
+
         
-    def update(self, landmarks, now_ms):
+    def update(self, landmarks, now_ms, eyes_open=True):
+        
+        # Skip detection if eyes are closed to avoid blink interference
+        if not eyes_open:
+            # reset counter so a blink doesn’t accumulate raise_frames
+            self.raise_frames = 0
+            return self.scroll_mode
         #for each frame the left and right sides of the face we calc 
         #the vertical gap (in pixles) btw the eye center and the eyebrow center
         #and we expect an upward distance increse +-15 px
@@ -440,11 +454,17 @@ class ScrollModeDetector:
         # Print live eyebrow distances and changes
         # print(f"[DEBUG] LeftDist={left_dist:.2f}, RightDist={right_dist:.2f}, Δ={change:.2f}")
 
-        #detect significant upward eyebrow raise
-        if (change > self.abs_thresh or rel_change > self.rel_thresh_ratio) and \
-           (now_ms - self.last_toggle_ms) > self.cooldown_ms:
+        # Multi-frame sustained raise detection
+        if change > self.abs_thresh or rel_change > self.rel_thresh_ratio:
+            self.raise_frames += 1
+        else:
+            self.raise_frames = 0  # reset if not sustained
+
+        # Require 3+ consecutive frames above threshold
+        if self.raise_frames >= 1 and (now_ms - self.last_toggle_ms) > self.cooldown_ms:
             self.scroll_mode = not self.scroll_mode
             self.last_toggle_ms = now_ms
+            self.raise_frames = 0
             print(f"Scroll mode toggled: {'ON' if self.scroll_mode else 'OFF'}")
 
         # Update stored distances
@@ -455,11 +475,15 @@ class ScrollModeDetector:
 
 
 
+
+
+
+
 def main():
     global num_of_clicks
 
     parser = argparse.ArgumentParser(description="Blink Detection Test")
-    parser.add_argument("--source", type=str, default="0", help="Camera index or video path")
+    parser.add_argument("--source", type=str, default="1", help="Camera index or video path")
     args = parser.parse_args()
     
     print("\n" + "="*80)
@@ -487,7 +511,7 @@ def main():
     
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    print(f"✓ Camera opened: {actual_width}x{actual_height}")
+    print(f"Camera opened: {actual_width}x{actual_height}")
     
     # Initialize MediaPipe Face Mesh
     print("Initializing Face Mesh...")
@@ -498,7 +522,7 @@ def main():
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
-    print("✓ Face Mesh loaded")
+    print("Face Mesh loaded")
     
     # Initialize components
     blink_state = BlinkDetection()
@@ -541,13 +565,15 @@ def main():
                 left_open = left_ear > EAR_OPEN_THRESHOLD
                 right_open = right_ear > EAR_OPEN_THRESHOLD
                 
+                eyes_open = not (left_closed and right_closed)
+                
                 # Update blink state
                 blink_type = blink_state.update_blink_state(left_closed, right_closed, left_open, right_open)
                 
                 # Process actions
                 now = now_ms()
                 action = blink_state.handle_blink_actions(blink_type, landmarks, mouse, now)
-                scroll_mode_active = scroll_detector.update(landmarks, now)
+                scroll_mode_active = scroll_detector.update(landmarks, now, eyes_open=eyes_open)
                 
                 color = (0, 255, 0) if scroll_mode_active else (0, 0, 255)
                 cv2.putText(frame, f"Scroll Mode: {'ON' if scroll_mode_active else 'OFF'}",
@@ -556,19 +582,19 @@ def main():
                 
                 # Visual feedback
                 if action == "keyboard_toggle":
-                    print("⌨️  Virtual keyboard toggled")
+                    print("Virtual keyboard toggled")
                     num_of_clicks  = 1
                 elif action == "left_click":
-                    print("✓ Left click")
+                    print("Left click")
                     num_of_clicks = 2
                 elif action == "right_click":
-                    print("✓ Right click")
+                    print("Right click")
                     num_of_clicks  = 1
 
                 elif action == "scroll_up":
-                    print("↑ Scroll up")
+                    print("Scroll up")
                 elif action == "scroll_down":
-                    print("↓ Scroll down")
+                    print("Scroll down")
                 
                 # Draw eye landmarks and EAR values
                 for idx in LEFT_EYE:
