@@ -484,6 +484,7 @@ class UnifiedEyeTracker:
         
         try:
             while cap.isOpened():
+                start_time = time.time()
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -527,6 +528,7 @@ class UnifiedEyeTracker:
                     self.gaze_settings.SHOW_DEBUG_INFO = \
                         not self.gaze_settings.SHOW_DEBUG_INFO
                     print(f"Debug: {'ON' if self.gaze_settings.SHOW_DEBUG_INFO else 'OFF'}")
+                time_calculator(start_time, "Full loop")
         
         finally:
             self.mouse_controller.stop()
@@ -535,6 +537,12 @@ class UnifiedEyeTracker:
             print("\n✓ Cleanup complete")
             print(f"Total frames processed: {self.frame_count}")
 
+# Time function to calculate time of each step
+def time_calculator(start_inf, label=""):
+    return #remvoe the line if you want timings
+    end_inf = time.time()
+    calc_time = end_inf - start_inf
+    print(f"{label} time: {calc_time*1000:.5f} ms")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -577,3 +585,4 @@ def main():
 if __name__ == "__main__":
     main()
     
+#command: python main_driver.py --model mobileone_s0_gaze.onnx --speed 20 --delay 0.3 --no-mouse, 120, 180, rip on screen keyboard

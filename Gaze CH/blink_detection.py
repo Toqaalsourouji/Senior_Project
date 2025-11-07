@@ -1,4 +1,3 @@
-import os
 import sys
 import ctypes
 import cv2
@@ -11,6 +10,7 @@ import platform
 import pygetwindow as gw
 import argparse
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import pyautogui 
 from collections import deque
 

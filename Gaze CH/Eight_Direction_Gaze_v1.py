@@ -18,6 +18,7 @@ import queue
 from pynput import mouse
 import json
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 # ==================== SETTINGS ====================
 @dataclass
