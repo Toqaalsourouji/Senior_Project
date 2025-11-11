@@ -26,6 +26,7 @@ EAR_OPEN_THRESHOLD = 0.30
 BLINK_CONSEC_FRAMES = 2     # Number of consecutive frames the eye must be below the threshold
 ACTION_COOLDOWN_MS = 300    # Cooldown period after an action is triggered
 SCROLL_AMOUNT = 250         # Amount to scroll on each blink action
+GAZE_SCROLL_SENSITIVITY = 5  # Amount to scroll per frame in scroll mode
 num_of_clicks = 1           # Number of clicks for left click action
 
 
@@ -1737,8 +1738,28 @@ class AccurateGazeApp:
         )
         
         if should_move_cursor:
-            self.mouse_controller.move_mouse(filtered_dir, filtered_conf)
-            
+            if self.scroll_mode_active:
+                #In Scroll mode: UP/DOWN directions trigger scrolling 
+                if filtered_dir == GazeDirection.UP:
+                    self.mouse_controller.mouse.scroll(0, SCROLL_AMOUNT // 50) #scroll up and we can play with the threshold
+                    print("Scrolling Up")
+                elif filtered_dir == GazeDirection.DOWN:
+                    self.mouse_controller.mouse.scroll(0, -SCROLL_AMOUNT // 50) #scroll down and we can play with the threshold
+                    print("Scrolling Down")
+                #Ignore any other directions in scroll mode or allow left/right scroll 
+                '''
+                elif filtered_dir == GazeDirection.LEFT:
+                    self.mouse_controller.mouse.scroll(-SCROLL_AMOUNT // 50, 0) #scroll left
+                    print("Scrolling Left")
+                elif filtered_dir == GazeDirection.RIGHT:
+                    self.mouse_controller.mouse.scroll(SCROLL_AMOUNT // 50, 0) #scroll right
+                    print("Scrolling Right")
+                '''
+            else:
+                #Normal mode: move mouse based on direction
+                self.mouse_controller.move_mouse(filtered_dir, filtered_conf)
+
+     
         time_calculator(start_time, "Move mouse") 
         # Detect face and mouse movement logic
         
@@ -1832,7 +1853,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Accurate 8-Direction Gaze Detection with Hybrid Approach")
-    parser.add_argument("--source", type=int, default=1)
+    parser.add_argument("--source", type=int, default=0)
     parser.add_argument("--model", default="mobileone_s0_gaze.onnx")
     parser.add_argument("--no-mouse", action="store_true")
     parser.add_argument("--calibrate", action="store_true")
