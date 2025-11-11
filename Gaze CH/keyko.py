@@ -672,9 +672,13 @@ class VirtualKeyboard:
     # function to press and release keys
     def vpresskey(self, x):
         self.master.unbind("<Unmap>", self.unmap_bind)
+        #self.master.withdraw()
+        #self.master.after(1, keyboard.send(x)) #delzo
+        #self.master.after(1, self.master.wm_deiconify) #delzo
+
         self.master.withdraw()
-        self.master.after(80, keyboard.send(x))
-        self.master.after(10, self.master.wm_deiconify)
+        keyboard.send(x)
+        self.master.wm_deiconify()
 
         if not self.spl_key_pressed:
             self.rel_shifts()
@@ -688,7 +692,7 @@ class VirtualKeyboard:
 
     # function to hold SHIFT, CTRL, ALT or WIN keys
     def vupdownkey(self, event, y, a):
-        self.master.after(80, self.donothing())
+        #self.master.after(10, self.donothing())#delzo
 
         if y == "shift":
             if self.row5buttons[0].cget('relief') == SUNKEN or self.row5buttons[11].cget('relief') == SUNKEN:
@@ -825,7 +829,7 @@ class VirtualKeyboard:
         sizebuttmore = Button(mainframe, text="+", font=stitlefont, bg="green", fg="white", command=lambda: [self.inc_size(), sizelabel.config(text=self.size_value_names[self.size_current])])
         sizebuttmore.place(x=270, y=237, height=20, width=30)
 
-        donebutton = Button(mainframe, text="Done", anchor=S, font=stitlefont, bg=self.purple, activebackground=self.darkpurple, fg="black", command=lambda: [settings_window.destroy(), self.master.after(20, self.addkbtotop())])
+        donebutton = Button(mainframe, text="Done", anchor=S, font=stitlefont, bg=self.purple, activebackground=self.darkpurple, fg="black", command=lambda: [settings_window.destroy(), self.master.after(10, self.addkbtotop())])
         donebutton.place(x=155, y=290, height=35, width=90)
 
         mainframe.place(x=0, y=0)
