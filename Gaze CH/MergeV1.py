@@ -1515,6 +1515,7 @@ class AccurateGazeApp:
         
         try:
             while cap.isOpened():
+                start_time2 = time.time()
                 start_time = time.time()
                 ret, frame = cap.read()
                 if not ret:
@@ -1596,6 +1597,7 @@ class AccurateGazeApp:
                     self.settings.SHOW_ANGLE_VALUES = not self.settings.SHOW_ANGLE_VALUES
                     print(f"Angle display: {'ON' if self.settings.SHOW_ANGLE_VALUES else 'OFF'}")
                 time_calculator(start_time, "Handle inputs")
+                time_calculator(start_time2, "FULL LOOP")
         finally:
             self.mouse_controller.stop()
             cap.release()
@@ -1844,7 +1846,7 @@ class AccurateGazeApp:
 
 # Time function to calculate time of each step
 def time_calculator(start_inf, label=""):
-    return #remvoe the line if you want timings
+    #return #remvoe the line if you want timings
     end_inf = time.time()
     calc_time = end_inf - start_inf
     print(f"{label} time: {calc_time*1000:.5f} ms")
@@ -1908,7 +1910,7 @@ if __name__ == "__main__":
 #FOR TOQA THE RIGHT BLINK IS NOT WORKING OR TOGGLING THE KEYBOARD!
 
 # command to run: 
-# python Eight_Direction_Gaze_v1.py --model mobileone_s0_gaze.onnx --calibrate --debug --kalman --delay 0.3 --hold-time 0.15 --center-required
+# python MergeV1.py --model mobileone_s0_gaze.onnx --calibrate --debug --kalman --delay 0.3 --hold-time 0.15 --center-required
 
 #Cam capture & details time: 7.97915 ms
 #FPS CALC time: 0.00000 ms
