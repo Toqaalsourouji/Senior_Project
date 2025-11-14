@@ -1,0 +1,17 @@
+# Ignore build outputs
+*.o
+*.so
+*.dylib
+*.exe
+gaze_app
+
+# Ignore macOS metadata
+.DS_Store
+
+# Ignore CMake build folders
+build/
+cmake-build-*/
+
+# Ignore model files (if large)
+*.onnx
+

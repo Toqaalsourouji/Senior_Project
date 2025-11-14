@@ -1,0 +1,46 @@
+sudo apt update
+sudo apt install -y \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    libopencv-dev \
+    libopencv-core-dev \
+    libopencv-highgui-dev \
+    libopencv-videoio-dev
+
+
+mkdir -p ~/libs
+cd ~/libs
+
+# Suppose you copied the file here as onnxruntime-linux-aarch64-1.22.2.tgz
+tar xvf onnxruntime-linux-aarch64-1.22.2.tgz
+
+# It will create a folder like onnxruntime-linux-aarch64-1.22.2
+sudo mkdir -p /opt/onnxruntime
+sudo cp -r onnxruntime-linux-aarch64-1.22.2/* /opt/onnxruntime/
+
+find /opt/onnxruntime -name onnxruntime_cxx_api.h
+
+Typical layout for the official tarball is:
+
+/opt/onnxruntime/include/onnxruntime/core/session/onnxruntime_cxx_api.h
+or
+
+/opt/onnxruntime/include/onnxruntime_cxx_api.h
+
+We’ll use that in the next step, this si for the gaze_estimation_onnx.hpp
+
+-I/opt/onnxruntime/include
+
+
+to run:
+g++ -std=c++17 main.cpp gaze_utils.cpp gaze_estimation_onnx.cpp \
+  -I/opt/onnxruntime/include \
+  `pkg-config --cflags --libs opencv4` \
+  -L/opt/onnxruntime/lib \
+  -lonnxruntime -lpthread \
+  -o gaze_app
+
+./gaze_app
+
