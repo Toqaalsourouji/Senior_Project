@@ -1,53 +1,130 @@
 import serial
 import serial.tools.list_ports
 import time
+import ctypes
 
-#find Pi Bluetooth COM port automatically
-def find_bluetooth_com():
+def install_if_missing(package, pypi_name=None):
+    if pypi_name is None:
+        pypi_name = package
+
+    if importlib.util.find_spec(package) is None:
+        print(f"{package} not installed. Installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pypi_name])
+    else:
+        print(f"{package} already installed.")
+
+# tkinter (built-in, but fallback install available)
+try:
+    import tkinter
+    print("Tkinter OK")
+except:
+    print("Tkinter missing. Installing fallback...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "tk"])
+
+time.sleep(1)
+
+# Now safely import your GUI
+from tkinter import *
+import tkinter.font as font
+from tkinter import messagebox
+
+# -----------------------------------
+# 1. Get PC Screen Resolution
+# -----------------------------------
+def get_screen_resolution(): #better way
+    user32 = ctypes.windll.user32
+    user32.SetProcessDPIAware()
+    w = user32.GetSystemMetrics(0)
+    h = user32.GetSystemMetrics(1)
+    return w, h
+
+SCREEN_W, SCREEN_H = get_screen_resolution()
+CENTER_X = SCREEN_W // 2
+CENTER_Y = SCREEN_H // 2
+DEADZONE = SCREEN_W // 10  # 10% of width
+
+print(f"PC Screen Resolution: {SCREEN_W}x{SCREEN_H}")
+
+# -----------------------------------
+# 2. Auto-find COM port from Raspberry Pi
+# -----------------------------------
+def find_com_port():
     ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if "Bluetooth" in port.description or "BTHENUM" in port.hwid:
-            return port.device
+    for p in ports:
+        # Pi Zero 2W USB gadget shows as COM device on Windows
+        # Check for common keywords in description
+        if "USB" in p.description or "ACM" in p.description or "Serial" in p.description:
+            return p.device
     return None
 
-PORT = find_bluetooth_com()
+PORT = find_com_port()
 if not PORT:
-    print("⚠️ No Bluetooth COM port found. Make sure the Pi is paired.")
+    print("⚠️ No COM port found from Raspberry Pi!")
     exit()
 
-print(f"✅ Found Bluetooth COM port: {PORT}")
+print(f"Using COM port: {PORT}")
 
-BAUD = 9600
-
-try:
-    ser = serial.Serial(PORT, BAUD, timeout=1)
-except serial.SerialException as e:
-    print("⚠️ Failed to open serial port:", e)
-    exit()
-
-print("Listening for commands from Raspberry Pi...")
-
+# -----------------------------------
+# 3. Open COM
+# -----------------------------------
+ser = serial.Serial(PORT, 9600, timeout=1)
 time.sleep(2)
 
+# -----------------------------------
+# 4. Interpret gaze into directions
+# -----------------------------------
+def get_direction(x, y):
+    dx = x - CENTER_X
+    dy = y - CENTER_Y
+
+    if abs(dx) < DEADZONE and abs(dy) < DEADZONE:
+        return "CENTER"
+
+    if abs(dx) > abs(dy):
+        return "RIGHT" if dx > 0 else "LEFT"
+    else:
+        return "DOWN" if dy > 0 else "UP"
+
+def get_directionXY(x, y):
+    dx = x - CENTER_X
+    dy = y - CENTER_Y
+
+    if abs(dx) < DEADZONE and abs(dy) < DEADZONE:
+        return "CENTER"
+
+    if abs(dx) > abs(dy):
+        return "RIGHT" if dx > 0 else "LEFT"
+    else:
+        return "DOWN" if dy > 0 else "UP"
+    
+# -----------------------------------
+# 5. Read from Raspberry Pi and interpret
+# -----------------------------------
+print("Listening for gaze data...")
+
 while True:
-    try:
-        data = ser.readline().decode().strip()
-        if not data:
-            continue
+    line = ser.readline().decode(errors="ignore").strip()
+    if not line:
+        continue
 
-        print("Received:", data)
+    print("Received:", line)
 
-        if data.lower() == "left":
-           print("Command got:", data)
-        else:
-            print("Unknown command:", data)
+    if line.startswith("Gaze:"):
+        try:
+            # Format: Gaze: x:NN, y:NN //check formatting
+            parts = line.replace("Gaze:", "").replace(" ", "")
+            xy = parts.split(",")
 
-    except serial.SerialException:
-        print("⚠️ Serial connection lost.")
-        break
-    except KeyboardInterrupt:
-        print("Exiting...")
-        break
+            x = int(xy[0].split(":")[1])
+            y = int(xy[1].split(":")[1])
+
+            direction = get_direction(x, y)
+            print("➡️ Direction:", direction)
+
+        except Exception as e:
+            print("⚠️ Parse error:", e)
+    else:
+        print("Unknown:", line)
 
 
 #pairing logic
@@ -71,3 +148,4 @@ while True:
 #to list ls /dev/rfcomm*
 #to create sudo rfcomm bind 0 XX:XX:XX:XX:XX:XX
 #to test pairing echo "test" | sudo tee /dev/rfcomm0
+

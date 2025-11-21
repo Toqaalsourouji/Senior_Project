@@ -3,7 +3,6 @@ import tkinter.font as font
 from tkinter import messagebox
 from sys import exit as end
 from os import system
-import pyautogui
 import time
 
 def time_calculator(start_inf, label=""):
@@ -945,3 +944,6 @@ if __name__ == '__main__':
 
     # starts to display the keyboard
     keyboard1.start()
+
+
+    
