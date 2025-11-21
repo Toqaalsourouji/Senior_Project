@@ -4,20 +4,22 @@ from tkinter import messagebox
 from sys import exit as end
 from os import system
 import time
+import json
+
 
 def time_calculator(start_inf, label=""):
     end_inf = time.time()
     calc_time = end_inf - start_inf
-    if calc_time < 0.02:  # Use : not {}
+    if calc_time < 0.02:
         return
     print(f"{label} time: {calc_time*1000:.5f} ms")
-# if user has the keyboard module installed
+
+
 has_keyboard = True
 
 try:
     import keyboard
 except (ModuleNotFoundError, ImportError):
-    # user doesn't have keyboard module installed
     dummy = Tk()
     dummy.withdraw()
     messagebox.showwarning('Missing Module: keyboard', 'Your system is missing the module "keyboard" for this program to work correctly.\n\nPlease click OK to install the "keyboard" module automatically.\nIn case this fails, the keyboard will still open in a non functional state')
@@ -31,21 +33,36 @@ except (ModuleNotFoundError, ImportError):
         dummy.destroy()
         has_keyboard = True
 
+has_pynput = True
+
+try:
+    from pynput.mouse import Controller
+    mouse = Controller()
+except (ModuleNotFoundError, ImportError):
+    print("pynput not found, installing...")
+    pynputstatus = system('python -m pip install pynput --quiet')
+    if pynputstatus != 0:
+        print("Failed to install pynput. Mouse snapping disabled.")
+        has_pynput = False
+        mouse = None
+    else:
+        print("pynput installed successfully!")
+        from pynput.mouse import Controller
+        mouse = Controller()
+        has_pynput = True
 
 class VirtualKeyboard:
 
     def __init__(self, master=Tk()):
-        # Main Window
         self.master = master
 
-        # prevent from crash if photo isn't found
-        try:
-            vkblogo = PhotoImage(file="vkblogo.png")
-            self.master.iconphoto(True, vkblogo)
-        except TclError:
-            # logo not found locally
-            pass
-
+        # Navigation state
+        self.current_row = 2
+        self.current_col = 6
+        self.nav_enabled = True
+        
+        self.all_buttons = []
+        self.mousemovey=True
         # Colors
         self.darkgray = "#242424"
         self.gray = "#383838"
@@ -57,39 +74,37 @@ class VirtualKeyboard:
         self.blue = "#488bf0"
         self.darkyellow = "#bfb967"
         self.yellow = "#ebe481"
+        self.highlight_color = "#00BFFF"
+        self.darkgreen = "#2d5016"
+        self.green = "#4a7c2c"
 
         self.master.configure(bg=self.gray)
         self.unmap_bind = self.master.bind("<Unmap>", lambda e: [self.rel_win(), self.rel_alts(), self.rel_shifts(), self.rel_ctrls()])
 
-        # makes sure shift/ctrl/alt/win keys aren't pressed down after keyboard closed
         self.master.protocol("WM_DELETE_WINDOW", lambda: [self.master.destroy(), end()])
         self.master.title("Virtual Keyboard (NON FUNCTIONAL)")
 
         self.user_scr_width = int(self.master.winfo_screenwidth())
         self.user_scr_height = int(self.master.winfo_screenheight())
 
-        self.trans_value = 0.7
+        self.load_settings()
         self.master.attributes('-alpha', self.trans_value)
         self.master.attributes('-topmost', True)
 
-        # avoid keyboard size conflicts for screens with lower resolution
         self.size_value_map = [
+            (int(0.56 * self.user_scr_width), int(0.34 * self.user_scr_height)),
             (int(0.63 * self.user_scr_width), int(0.37 * self.user_scr_height)),
             (int(0.70 * self.user_scr_width), int(0.42 * self.user_scr_height)),
             (int(0.78 * self.user_scr_width), int(0.46 * self.user_scr_height)),
             (int(0.86 * self.user_scr_width), int(0.51 * self.user_scr_height)),
             (int(0.94 * self.user_scr_width), int(0.56 * self.user_scr_height))
         ]
-        self.size_value_names = ["Very Small", "Small", "Medium", "Large", "Very Large"]
 
-        # index for both size value map and size value names
-        self.size_current = 2
+        self.size_value_names = ["Microscope", "Small", "Medium", "Large", "Very Large", "GIGA SIZE"]
 
-        # open keyboard in medium size by default (not resizable)
         self.master.geometry(f"{self.size_value_map[self.size_current][0]}x{self.size_value_map[self.size_current][1]}")
         self.master.resizable(False, False)
 
-        # keys in every row
         self.row1keys = ["esc", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
                          "f11", "f12", "print_screen", "scroll_lock", "numlock"]
 
@@ -106,50 +121,41 @@ class VirtualKeyboard:
                          ',', '.', '/', 'right shift', 'up', 'insert']
 
         self.row6keys = ["left ctrl", 'win', 'alt', 'spacebar', 'alt gr',
-                         'right ctrl', ':)', 'left', 'down', 'right']
+                         'right ctrl', 'Mouse: True', 'left', 'down', 'right']
 
-        # buttons for each row
         self.row1buttons = []
         self.row2buttons = []
         self.row3buttons = []
         self.row4buttons = []
         self.row5buttons = []
         self.row6buttons = []
+        self.row7buttons = []
 
-        # efficiency i guess?
         appendrow1 = self.row1buttons.append
         appendrow2 = self.row2buttons.append
         appendrow3 = self.row3buttons.append
         appendrow4 = self.row4buttons.append
         appendrow5 = self.row5buttons.append
         appendrow6 = self.row6buttons.append
+        appendrow7 = self.row7buttons.append
 
-        # prevents frames having inconsistent relative dimensions
         self.master.columnconfigure(0, weight=1)
         for i in range(7):
             self.master.rowconfigure(i, weight=1)
 
-        # Create fonts acc to resolution
         if self.user_scr_width < 1600:
             self.keyfont = font.Font(family="Calibri", size=10, weight='bold')
             self.bottomfont = font.Font(family='Calibri', size=11, weight='bold')
-            self.neetfont = font.Font(family='Lucida Handwriting', size=8, weight='normal')
         else:
             self.keyfont = font.Font(family="Calibri", size=13, weight='bold')
             self.bottomfont = font.Font(family='Calibri', size=13, weight='bold')
-            self.neetfont = font.Font(family='Lucida Handwriting', size=10, weight='normal')
 
-        # spl_key_pressed is True if ALT, CTRL, SHIFT or WIN are held down using right click
-        # if it is False, the 4 mentioned keys get released on clicking any other key
         self.spl_key_pressed = False
 
         #   ROW 1
-
-        # create a frame for row1buttons
         keyframe1 = Frame(self.master, height=1)
         keyframe1.rowconfigure(0, weight=1)
 
-        # create row1buttons
         for key in self.row1keys:
             ind = self.row1keys.index(key)
             keyframe1.columnconfigure(ind, weight=1)
@@ -175,13 +181,10 @@ class VirtualKeyboard:
 
             self.row1buttons[ind].grid(row=0, column=ind, sticky="NSEW")
 
-        #   ROW 2   #
-
-        # create a frame for row2buttons
+        #   ROW 2
         keyframe2 = Frame(self.master, height=1)
         keyframe2.rowconfigure(0, weight=1)
 
-        # create row2buttons
         for key in self.row2keys:
             ind = self.row2keys.index(key)
             if ind == 13:
@@ -220,13 +223,10 @@ class VirtualKeyboard:
         self.row2buttons[11].config(text="_\n-")
         self.row2buttons[12].config(text="+\n=")
 
-        #   ROW 3   #
-
-        # create a frame for row3buttons
+        #   ROW 3
         keyframe3 = Frame(self.master, width=1)
         keyframe3.rowconfigure(0, weight=1)
 
-        # create row3buttons
         for key in self.row3keys:
             ind = self.row3keys.index(key)
             if ind == 13:
@@ -259,13 +259,10 @@ class VirtualKeyboard:
 
             self.row3buttons[ind].grid(row=0, column=ind, sticky="NSEW")
 
-        #   ROW 4   #
-
-        # create a frame for row4buttons
+        #   ROW 4
         keyframe4 = Frame(self.master, height=1)
         keyframe4.rowconfigure(0, weight=1)
 
-        # create row4buttons
         for key in self.row4keys:
             ind = self.row4keys.index(key)
             keyframe4.columnconfigure(ind, weight=1)
@@ -293,13 +290,10 @@ class VirtualKeyboard:
 
             self.row4buttons[ind].grid(row=0, column=ind, sticky="NSEW")
 
-        #   ROW 5   #
-
-        # create a frame for row5buttons
+        #   ROW 5
         keyframe5 = Frame(self.master, height=1)
         keyframe5.rowconfigure(0, weight=1)
 
-        # create row5buttons
         for key in self.row5keys:
             ind = self.row5keys.index(key)
             if ind == 0 or ind == 11:
@@ -336,13 +330,10 @@ class VirtualKeyboard:
 
             self.row5buttons[ind].grid(row=0, column=ind, sticky="NSEW")
 
-        #   ROW 6   #
-
-        # create a frame for row6buttons
+        #   ROW 6
         keyframe6 = Frame(self.master, height=1)
         keyframe6.rowconfigure(0, weight=1)
 
-        # create row6buttons
         for key in self.row6keys:
             ind = self.row6keys.index(key)
             if ind == 3:
@@ -379,24 +370,20 @@ class VirtualKeyboard:
                 self.row6buttons[ind].config(text="Alt")
             elif key == "alt gr":
                 self.row6buttons[ind].config(text="Alt")
-            elif key == ":)":
+            elif key == "Mouse: True":
                 self.row6buttons[ind].config(text=key, width=4, bg=self.red, activebackground=self.darkred, command=self.donothing)
             else:
                 self.row6buttons[ind].config(text=key.title())
 
             self.row6buttons[ind].grid(row=0, column=ind, sticky="NSEW")
 
-        # create final frame 7 for custom keys
+        self.update_mouse_button_text()
+        #   ROW 7 - Control buttons
         infoframe7 = Frame(self.master, height=1, bg=self.gray)
         infoframe7.rowconfigure(0, weight=1)
 
-        # empty space
+        # Copy button
         infoframe7.columnconfigure(0, weight=1)
-        self.tips_space = Button(infoframe7, text="Enjoy the buttons :)", bg=self.gray, relief=FLAT, disabledforeground="white", font=self.bottomfont, state=DISABLED, height=1)
-        self.tips_space.grid(row=0, column=0, sticky="NSEW")
-
-        # copy button
-        infoframe7.columnconfigure(2, weight=1)
         self.copy_button = Button(
             infoframe7,
             font=self.bottomfont,
@@ -408,10 +395,11 @@ class VirtualKeyboard:
             fg="black",
             relief=RAISED
         )
-        self.copy_button.grid(row=0, column=2, padx=2, sticky="NSEW")
+        self.copy_button.grid(row=0, column=0, padx=2, sticky="NSEW")
+        appendrow7(self.copy_button)
 
-        # cut button
-        infoframe7.columnconfigure(3, weight=1)
+        # Cut button
+        infoframe7.columnconfigure(1, weight=1)
         self.cut_button = Button(
             infoframe7,
             font=self.bottomfont,
@@ -423,10 +411,11 @@ class VirtualKeyboard:
             fg="black",
             relief=RAISED
         )
-        self.cut_button.grid(row=0, column=3, padx=2, sticky="NSEW")
+        self.cut_button.grid(row=0, column=1, padx=2, sticky="NSEW")
+        appendrow7(self.cut_button)
 
-        # paste button
-        infoframe7.columnconfigure(4, weight=1)
+        # Paste button
+        infoframe7.columnconfigure(2, weight=1)
         self.paste_button = Button(
             infoframe7,
             font=self.bottomfont,
@@ -438,10 +427,11 @@ class VirtualKeyboard:
             fg="black",
             relief=RAISED
         )
-        self.paste_button.grid(row=0, column=4, padx=2, sticky="NSEW")
+        self.paste_button.grid(row=0, column=2, padx=2, sticky="NSEW")
+        appendrow7(self.paste_button)
 
-        # select all button
-        infoframe7.columnconfigure(5, weight=1)
+        # Select all button
+        infoframe7.columnconfigure(3, weight=1)
         self.selall_button = Button(
             infoframe7,
             font=self.bottomfont,
@@ -453,10 +443,45 @@ class VirtualKeyboard:
             fg="black",
             relief=RAISED
         )
-        self.selall_button.grid(row=0, column=5, padx=2, sticky="NSEW")
+        self.selall_button.grid(row=0, column=3, padx=2, sticky="NSEW")
+        appendrow7(self.selall_button)
 
-        # task manager button
-        infoframe7.columnconfigure(7, weight=1)
+        # Opacity cycle button
+        infoframe7.columnconfigure(4, weight=1)
+        self.opacity_button = Button(
+            infoframe7,
+            font=self.bottomfont,
+            border=5,
+            bg=self.yellow,
+            text=f"Opacity\n{int(self.trans_value * 100)}%",
+            activebackground=self.darkyellow,
+            activeforeground="black",
+            fg="black",
+            relief=RAISED,
+            command=self.cycle_opacity
+        )
+        self.opacity_button.grid(row=0, column=4, padx=2, sticky="NSEW")
+        appendrow7(self.opacity_button)
+
+        # Size cycle button
+        infoframe7.columnconfigure(5, weight=1)
+        self.size_button = Button(
+            infoframe7,
+            font=self.bottomfont,
+            border=5,
+            bg=self.yellow,
+            text=f"Size\n{self.size_value_names[self.size_current]}",
+            activebackground=self.darkyellow,
+            activeforeground="black",
+            fg="black",
+            relief=RAISED,
+            command=self.cycle_size
+        )
+        self.size_button.grid(row=0, column=5, padx=2, sticky="NSEW")
+        appendrow7(self.size_button)
+
+        # Task manager button
+        infoframe7.columnconfigure(6, weight=1)
         self.taskmnger_button = Button(
             infoframe7,
             font=self.bottomfont,
@@ -468,45 +493,105 @@ class VirtualKeyboard:
             fg="black",
             relief=RAISED
         )
-        self.taskmnger_button.grid(row=0, column=7, padx=2, sticky="NSEW")
+        self.taskmnger_button.grid(row=0, column=6, padx=2, sticky="NSEW")
+        appendrow7(self.taskmnger_button)
 
-        # pin keyboard button
-        infoframe7.columnconfigure(8, weight=1)
+        # Pin keyboard button
+        infoframe7.columnconfigure(7, weight=1)
         self.pinkb_button = Button(
             infoframe7,
             font=self.bottomfont,
             border=5,
             bg=self.darkblue,
-            text="Unpin Keyboard 📌",
+            text="Unpin 📌",
             activebackground=self.blue,
             activeforeground="black",
             fg="black",
-            width=15,
             relief=SUNKEN,
             command=self.keyboard_top)
-        self.pinkb_button.grid(row=0, column=8, padx=2, sticky="NSEW")
+        self.pinkb_button.grid(row=0, column=7, padx=2, sticky="NSEW")
+        appendrow7(self.pinkb_button)
 
-        # settings button
-        infoframe7.columnconfigure(11, weight=1)
-        self.settings_button = Button(
+        # Move keyboard UP button
+        infoframe7.columnconfigure(8, weight=1)
+        self.move_up_button = Button(
             infoframe7,
             font=self.bottomfont,
             border=5,
-            bg=self.yellow,
-            text="Keyboard Settings",
-            activebackground=self.darkyellow,
+            bg=self.green,
+            text="↑",
+            activebackground=self.darkgreen,
             activeforeground="black",
             fg="black",
             relief=RAISED,
-            command=self.kb_settings
+            command=lambda: self.move_keyboard(0, -30)
         )
-        self.settings_button.grid(row=0, column=11, padx=2, sticky="NSEW")
+        self.move_up_button.grid(row=0, column=8, padx=2, sticky="NSEW")
+        appendrow7(self.move_up_button)
 
-        # decor
+        # Move keyboard DOWN button
+        infoframe7.columnconfigure(9, weight=1)
+        self.move_down_button = Button(
+            infoframe7,
+            font=self.bottomfont,
+            border=5,
+            bg=self.green,
+            text="↓",
+            activebackground=self.darkgreen,
+            activeforeground="black",
+            fg="black",
+            relief=RAISED,
+            command=lambda: self.move_keyboard(0, 30)
+        )
+        self.move_down_button.grid(row=0, column=9, padx=2, sticky="NSEW")
+        appendrow7(self.move_down_button)
+
+        # Move keyboard LEFT button
         infoframe7.columnconfigure(10, weight=1)
-        Label(infoframe7, text="Made with Love...\nand python", bg=self.gray, fg="white", font=self.neetfont).grid(row=0, column=10, sticky="NSEW")
+        self.move_left_button = Button(
+            infoframe7,
+            font=self.bottomfont,
+            border=5,
+            bg=self.green,
+            text="←",
+            activebackground=self.darkgreen,
+            activeforeground="black",
+            fg="black",
+            relief=RAISED,
+            command=lambda: self.move_keyboard(-30, 0)
+        )
+        self.move_left_button.grid(row=0, column=10, padx=2, sticky="NSEW")
+        appendrow7(self.move_left_button)
 
-        # add the frames to the main window
+        # Move keyboard RIGHT button
+        infoframe7.columnconfigure(11, weight=1)
+        self.move_right_button = Button(
+            infoframe7,
+            font=self.bottomfont,
+            border=5,
+            bg=self.green,
+            text="→",
+            activebackground=self.darkgreen,
+            activeforeground="black",
+            fg="black",
+            relief=RAISED,
+            command=lambda: self.move_keyboard(30, 0)
+        )
+        self.move_right_button.grid(row=0, column=11, padx=2, sticky="NSEW")
+        appendrow7(self.move_right_button)
+
+        # Store button rows for navigation
+        self.all_buttons = [
+            self.row1buttons,
+            self.row2buttons,
+            self.row3buttons,
+            self.row4buttons,
+            self.row5buttons,
+            self.row6buttons,
+            self.row7buttons
+        ]
+
+        # Add frames to window
         keyframe1.grid(row=0, sticky="NSEW", padx=9, pady=6)
         keyframe2.grid(row=1, sticky="NSEW", padx=9)
         keyframe3.grid(row=2, sticky="NSEW", padx=9)
@@ -515,16 +600,179 @@ class VirtualKeyboard:
         keyframe6.grid(row=5, padx=9, sticky="NSEW")
         infoframe7.grid(row=6, padx=9, pady=5, sticky="NSEW")
 
-    # nothing
-    def donothing(self):
-        """
-            This function is empty for now...
-            maybe a new feature for the [ :) ] button
-            """
-        pass
+        # Bind arrow keys for navigation
+        self.master.bind('<Up>', lambda e: self.navigate('up'))
+        self.master.bind('<Down>', lambda e: self.navigate('down'))
+        self.master.bind('<Left>', lambda e: self.navigate('left'))
+        self.master.bind('<Right>', lambda e: self.navigate('right'))
+        self.master.bind('<Return>', lambda e: self.activate_current_key())
+        self.master.bind('<space>', lambda e: self.activate_current_key())
 
-    # an exception to get the symbols ? and _ from the keyboard module's virtual hotkeys
-    # for some reason "SHIFT+-" or "SHIFT+/" don't work :/
+        # Highlight starting position
+        self.master.after(100, self.highlight_current_key)
+
+    def move_keyboard(self, dx, dy):
+        """Move the keyboard window by dx, dy pixels"""
+        current_x = self.master.winfo_x()
+        current_y = self.master.winfo_y()
+        new_x = current_x + dx
+        new_y = current_y + dy
+        self.master.geometry(f"+{new_x}+{new_y}")
+        self.master.after(50, self.highlight_current_key)
+
+    def cycle_opacity(self):
+        """Cycle through opacity values"""
+        opacity_values = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        current_index = min(range(len(opacity_values)), key=lambda i: abs(opacity_values[i] - self.trans_value))
+        next_index = (current_index + 1) % len(opacity_values)
+        self.trans_value = opacity_values[next_index]
+        self.master.attributes('-alpha', self.trans_value)
+        self.opacity_button.config(text=f"Opacity\n{int(self.trans_value * 100)}%")
+        self.save_settings()
+        self.master.after(50, self.highlight_current_key)
+
+    def cycle_size(self):
+        """Cycle through size values"""
+        self.size_current = (self.size_current + 1) % len(self.size_value_names)
+        new_width = self.size_value_map[self.size_current][0]
+        new_height = self.size_value_map[self.size_current][1]
+        self.master.geometry(f"{new_width}x{new_height}")
+        self.size_button.config(text=f"Size\n{self.size_value_names[self.size_current]}")
+        self.save_settings()
+        self.master.after(100, self.highlight_current_key)
+
+    def load_settings(self):
+        """Load saved settings from file"""
+        try:
+            with open('vkb_settings.json', 'r') as f:
+                settings = json.load(f)
+                self.trans_value = settings.get('transparency', 0.7)
+                self.size_current = settings.get('size', 2)
+                self.mousemovey = settings.get('mousemove', True)  # Add this
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.trans_value = 0.7
+            self.size_current = 2
+            self.mousemovey = True  # Add this
+
+    def save_settings(self):
+        """Save current settings to file"""
+        settings = {
+            'transparency': self.trans_value,
+            'size': self.size_current,
+            'mousemove': self.mousemovey  # Add this
+        }
+        try:
+            with open('vkb_settings.json', 'w') as f:
+                json.dump(settings, f, indent=4)
+        except:
+            pass
+        
+    def update_mouse_button_text(self):
+          """Update the button text to show mouse snap status"""
+          status = "ON" if self.mousemovey else "OFF"
+          # Find the :) button (it's at row6buttons[6])
+          self.row6buttons[6].config(text=f"Mouse\n{status}")
+
+
+    def on_button_click(self, row, col):
+        """Update navigation position when button is clicked with mouse"""
+        self.current_row = row
+        self.current_col = col
+        self.highlight_current_key()        
+
+
+
+    def get_button_original_colors(self, button):
+        """Store original colors for a button"""
+        if not hasattr(button, '_original_bg'):
+            button._original_bg = button.cget('bg')
+            button._original_fg = button.cget('fg')
+        return button._original_bg, button._original_fg
+
+    def highlight_current_key(self):
+        """Highlight the currently selected key"""
+        for row in self.all_buttons:
+            for button in row:
+                orig_bg, orig_fg = self.get_button_original_colors(button)
+                if button.cget('relief') != SUNKEN:
+                    button.config(bg=orig_bg, fg=orig_fg)
+        
+        if 0 <= self.current_row < len(self.all_buttons):
+            row = self.all_buttons[self.current_row]
+            if 0 <= self.current_col < len(row):
+                current_button = row[self.current_col]
+                current_button.config(bg=self.highlight_color, fg="black")
+                self.snap_mouse_to_button(current_button)
+
+    def snap_mouse_to_button(self, button):
+        """Move mouse cursor to the center of the button"""
+        if not has_pynput or mouse is None or self.mousemovey is False:
+            return
+        try:
+            x = button.winfo_rootx() + button.winfo_width() // 2
+            y = button.winfo_rooty() + button.winfo_height() // 2
+            mouse.position = (x, y)
+        except:
+            pass
+
+    def navigate(self, direction):
+        """Navigate between keys using arrow keys with smart column alignment"""
+        if not self.nav_enabled:
+            return           
+        
+
+        #dis is dah place holder, Finds which button in the new row has its center closest to that x-position instea fo quikc siwtchin
+        if direction == 'left':
+            self.current_col = max(0, self.current_col - 1)
+        elif direction == 'right':
+            row = self.all_buttons[self.current_row]
+            self.current_col = min(len(row) - 1, self.current_col + 1)
+        elif direction == 'up' or direction == 'down':
+            # Store the current button's horizontal position before moving
+            current_button = self.all_buttons[self.current_row][self.current_col]
+            try:
+                current_x = current_button.winfo_rootx() + current_button.winfo_width() // 2
+            except:
+                current_x = 0
+            
+            # Move to new row
+            if direction == 'up':
+                self.current_row = max(0, self.current_row - 1)
+            else:  # down
+                self.current_row = min(len(self.all_buttons) - 1, self.current_row + 1)
+            
+            # Find the button in the new row that's closest to our horizontal position
+            new_row = self.all_buttons[self.current_row]
+            closest_col = 0
+            min_distance = float('inf')
+            
+            for col_idx, button in enumerate(new_row):
+                try:
+                    button_x = button.winfo_rootx() + button.winfo_width() // 2
+                    distance = abs(button_x - current_x)
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_col = col_idx
+                except:
+                    pass
+            
+            self.current_col = closest_col
+        
+        self.highlight_current_key()
+
+    def activate_current_key(self):
+        """Activate/click the currently highlighted key"""
+        if 0 <= self.current_row < len(self.all_buttons):
+            row = self.all_buttons[self.current_row]
+            if 0 <= self.current_col < len(row):
+                current_button = row[self.current_col]
+                current_button.invoke()
+
+    def donothing(self):
+        self.mousemovey = not self.mousemovey
+        self.update_mouse_button_text()
+        self.save_settings()
+
     def quest_press(self, x):
         if self.row5buttons[0].cget('relief') == SUNKEN:
             if x == "-":
@@ -537,148 +785,49 @@ class VirtualKeyboard:
         if self.spl_key_pressed:
             keyboard.press('shift')
 
-    # release shift keys
     def rel_shifts(self):
         keyboard.release('shift')
+        self.row5buttons[0].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
+        self.row5buttons[11].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
 
-        self.row5buttons[0].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-        self.row5buttons[11].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-
-    # press shift keys
     def prs_shifts(self):
         keyboard.press('shift')
+        self.row5buttons[0].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
+        self.row5buttons[11].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
 
-        self.row5buttons[0].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-        self.row5buttons[11].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-
-    # release ctrl keys
     def rel_ctrls(self):
         keyboard.release('ctrl')
+        self.row6buttons[0].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
+        self.row6buttons[5].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
 
-        self.row6buttons[0].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-        self.row6buttons[5].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-
-    # press ctrl keys
     def prs_ctrls(self):
         keyboard.press('ctrl')
+        self.row6buttons[0].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
+        self.row6buttons[5].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
 
-        self.row6buttons[0].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-        self.row6buttons[5].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-
-    # release alt keys
     def rel_alts(self):
         keyboard.release('alt')
+        self.row6buttons[2].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
+        self.row6buttons[4].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
 
-        self.row6buttons[2].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-        self.row6buttons[4].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-
-    # press alt keys
     def prs_alts(self):
         keyboard.press('alt')
+        self.row6buttons[2].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
+        self.row6buttons[4].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
 
-        self.row6buttons[2].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-        self.row6buttons[4].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-
-    # release win key
     def rel_win(self):
         keyboard.release('win')
+        self.row6buttons[1].config(relief=RAISED, bg=self.gray, activebackground=self.darkgray, activeforeground="#bababa", fg="white")
 
-        self.row6buttons[1].config(
-            relief=RAISED,
-            bg=self.gray,
-            activebackground=self.darkgray,
-            activeforeground="#bababa",
-            fg="white"
-        )
-
-    # press win key
     def prs_win(self):
         keyboard.press('win')
+        self.row6buttons[1].config(relief=SUNKEN, activebackground=self.gray, bg=self.darkgray, fg="#bababa", activeforeground="white")
 
-        self.row6buttons[1].config(
-            relief=SUNKEN,
-            activebackground=self.gray,
-            bg=self.darkgray,
-            fg="#bababa",
-            activeforeground="white")
-
-    # function to press and release keys
     def vpresskey(self, x):
         self.master.unbind("<Unmap>", self.unmap_bind)
-        #self.master.withdraw()
-        #self.master.after(1, keyboard.send(x)) #delzo
-        #self.master.after(1, self.master.wm_deiconify) #delzo
-
         self.master.withdraw()
-        keyboard.send(x)
-        self.master.wm_deiconify()
-
+        self.master.after(5, keyboard.send(x))
+        self.master.after(20, self.master.wm_deiconify)
         if not self.spl_key_pressed:
             self.rel_shifts()
             self.rel_ctrls()
@@ -688,29 +837,26 @@ class VirtualKeyboard:
         if self.pinkb_button.cget('relief') == RAISED:
             self.addkbtotop()
         self.unmap_bind = self.master.bind("<Unmap>", lambda e: [self.rel_win(), self.rel_alts(), self.rel_shifts(), self.rel_ctrls()])
+        self.master.after(50, self.highlight_current_key)
 
-    # function to hold SHIFT, CTRL, ALT or WIN keys
     def vupdownkey(self, event, y, a):
-        #self.master.after(10, self.donothing())#delzo
+        self.master.after(1, self.donothing())
 
         if y == "shift":
             if self.row5buttons[0].cget('relief') == SUNKEN or self.row5buttons[11].cget('relief') == SUNKEN:
                 self.rel_shifts()
             else:
                 self.prs_shifts()
-
         elif y == "ctrl":
             if self.row6buttons[0].cget('relief') == SUNKEN or self.row6buttons[5].cget('relief') == SUNKEN:
                 self.rel_ctrls()
             else:
                 self.prs_ctrls()
-
         elif y == "alt":
             if self.row6buttons[2].cget('relief') == SUNKEN or self.row6buttons[4].cget('relief') == SUNKEN:
                 self.rel_alts()
             else:
                 self.prs_alts()
-
         elif y == "win":
             if self.row6buttons[1].cget('relief') == SUNKEN:
                 self.rel_win()
@@ -719,122 +865,21 @@ class VirtualKeyboard:
 
         if a == "L":
             self.spl_key_pressed = False
-            # presses shift, alt, ctrl or win temporarily until remaining keys pressed
         elif a == "R":
             self.spl_key_pressed = True
-            # holds down shift, alt, ctrl or win
+        
+        self.master.after(50, self.highlight_current_key)
 
-    # Increase size of window by 1 custom size unit (see list size_value_names)
-    def inc_size(self):
-        if 0 <= self.size_current < 4:
-            self.size_current += 1
-            new_width = self.size_value_map[self.size_current][0]
-            new_height = self.size_value_map[self.size_current][1]
-
-            self.master.geometry(f"{new_width}x{new_height}")
-            self.master.update()
-        else:
-            pass
-
-    # Decrease size of window by 1 custom size unit (see list size_value_names)
-    def dec_size(self):
-        if 0 < self.size_current <= 4:
-            self.size_current -= 1
-            new_width = self.size_value_map[self.size_current][0]
-            new_height = self.size_value_map[self.size_current][1]
-
-            self.master.geometry(f"{new_width}x{new_height}")
-            self.master.update()
-        else:
-            pass
-
-    # Increase transparency of window a.k.a reduce alpha/opacity by 10 %
-    def inc_trans(self):
-        if 0.3 < self.trans_value <= 1.0:
-            self.trans_value -= 0.1
-            floatsubtractionsbelike = float(str(self.trans_value)[:3])
-            self.trans_value = floatsubtractionsbelike
-            self.master.attributes('-alpha', self.trans_value)
-            self.master.update()
-        else:
-            pass
-
-    # Decrease transparency of window a.k.a increase alpha/opacity by 10 %
-    def dec_trans(self):
-        if 0.3 <= self.trans_value < 1.0:
-            self.trans_value += 0.100069420
-            floatadditionsbelike = float(str(self.trans_value)[:3])
-            self.trans_value = floatadditionsbelike
-            self.master.attributes('-alpha', self.trans_value)
-            self.master.update()
-        else:
-            pass
-
-    # disable the option to keep keyboard on top
     def removekbfromtop(self):
         self.master.attributes('-topmost', False)
-        self.pinkb_button.config(bg=self.blue, activebackground=self.darkblue, relief=RAISED, text="Pin Keyboard 📌")
+        self.pinkb_button.config(bg=self.blue, activebackground=self.darkblue, relief=RAISED, text="Pin 📌")
         self.master.update()
 
-    # enable the option to keep keyboard on top
     def addkbtotop(self):
         self.master.attributes('-topmost', True)
-        self.pinkb_button.config(relief=SUNKEN, bg=self.darkblue, activebackground=self.blue, text="Unpin Keyboard 📌")
+        self.pinkb_button.config(relief=SUNKEN, bg=self.darkblue, activebackground=self.blue, text="Unpin 📌")
         self.master.update()
 
-    # Settings window
-    def kb_settings(self):
-        self.removekbfromtop()
-        if has_keyboard:
-            self.rel_shifts()
-            self.rel_alts()
-            self.rel_ctrls()
-            self.rel_win()
-
-        settings_window = Toplevel()
-        settings_window.geometry(f'400x344+{int(self.user_scr_width / 2) - 200}+{int(self.user_scr_height / 2) - 200}')
-
-        settings_window.title("Virtual KeyBoard Settings")
-        settings_window.resizable(False, False)
-        settings_window.config(bg=self.gray)
-        settings_window.overrideredirect(True)
-        settings_window.grab_set()
-        settings_window.focus_set()
-
-        # Fonts for settings window
-        stitlefont = font.Font(family="Calibri", size=20, weight="bold")
-        sfont = font.Font(family="Calibri", size=16, weight="bold")
-
-        mainframe = Frame(settings_window, height=344, width=400, bg=self.gray, highlightthickness=2, highlightbackground=self.yellow)
-
-        stitle = Label(mainframe, text="Keyboard Settings", font=stitlefont, bg=self.gray, fg=self.yellow)
-        stitle.place(anchor=N, x=200, y=20)
-
-        transtitle = Label(mainframe, text="Opacity", font=sfont, bg=self.gray, fg=self.blue, anchor=CENTER)
-        transtitle.place(anchor=N, x=200, y=100)
-        translabel = Label(mainframe, text=str(int(self.trans_value * 100)) + "%", font=sfont, bg=self.gray, fg="white")
-        translabel.place(anchor=N, x=200, y=140)
-        transbuttless = Button(mainframe, text="-", font=stitlefont, bg=self.red, fg="white", command=lambda: [self.inc_trans(), translabel.config(text=(str(int(self.trans_value * 100)) + "%"))])
-        transbuttless.place(x=100, y=145, height=20, width=30)
-        transbuttmore = Button(mainframe, text="+", font=stitlefont, bg="green", fg="white", command=lambda: [self.dec_trans(), translabel.config(text=(str(int(self.trans_value * 100)) + "%"))])
-        transbuttmore.place(x=270, y=145, height=20, width=30)
-
-        sizetitle = Label(mainframe, text="Keyboard Size", font=sfont, bg=self.gray, fg=self.blue, anchor=CENTER)
-        sizetitle.place(anchor=N, x=200, y=190)
-        sizelabel = Label(mainframe, text=self.size_value_names[self.size_current], font=sfont, bg=self.gray, fg="white")
-        sizelabel.place(anchor=N, x=200, y=230)
-        sizebuttless = Button(mainframe, text="-", font=stitlefont, bg=self.red, fg="white", command=lambda: [self.dec_size(), sizelabel.config(text=self.size_value_names[self.size_current])])
-        sizebuttless.place(x=100, y=237, height=20, width=30)
-        sizebuttmore = Button(mainframe, text="+", font=stitlefont, bg="green", fg="white", command=lambda: [self.inc_size(), sizelabel.config(text=self.size_value_names[self.size_current])])
-        sizebuttmore.place(x=270, y=237, height=20, width=30)
-
-        donebutton = Button(mainframe, text="Done", anchor=S, font=stitlefont, bg=self.purple, activebackground=self.darkpurple, fg="black", command=lambda: [settings_window.destroy(), self.master.after(10, self.addkbtotop())])
-        donebutton.place(x=155, y=290, height=35, width=90)
-
-        mainframe.place(x=0, y=0)
-        settings_window.mainloop()
-
-    # function to check if keyboard on top or not and revert the option
     def keyboard_top(self):
         if self.pinkb_button.cget("relief") == RAISED:
             self.addkbtotop()
@@ -843,7 +888,6 @@ class VirtualKeyboard:
         else:
             self.removekbfromtop()
 
-    # start keyboard
     def start(self):
         running = True
         
@@ -860,22 +904,18 @@ class VirtualKeyboard:
         
         self.master.protocol("WM_DELETE_WINDOW", on_closing)
         
-        # Main loop with timing
         while running:
-       
             start_time = time.time()
-            
             try:
                 self.master.update()
             except:
                 break
-            
             time_calculator(start_time, "Main loop")
 
-    # add functionality to keyboard
     def engine(self):
         self.master.title("Virtual Keyboard")
         self.master.protocol("WM_DELETE_WINDOW", lambda: [keyboard.release('shift'), keyboard.release('ctrl'), keyboard.release('alt'), keyboard.release('win'), self.master.destroy(), end()])
+        
         for key in self.row1keys:
             ind = self.row1keys.index(key)
             self.row1buttons[ind].config(command=lambda x=key: self.vpresskey(x))
@@ -911,7 +951,7 @@ class VirtualKeyboard:
             if key == "win":
                 self.row6buttons[ind].config(command=lambda: self.vupdownkey("<Button-1>", 'win', "L"))
                 self.row6buttons[ind].bind('<Button-3>', lambda event="<Button-3>", y='win', a="R": self.vupdownkey(event, y, a))
-            elif key == ":)":
+            elif key == "Mouse: True":
                 self.row6buttons[ind].config(command=self.donothing)
             elif key == "left ctrl":
                 self.row6buttons[ind].config(command=lambda: self.vupdownkey("<Button-1>", 'ctrl', "L"))
@@ -925,8 +965,11 @@ class VirtualKeyboard:
             elif key == "alt gr":
                 self.row6buttons[ind].config(command=lambda: self.vupdownkey("<Button-1>", 'alt', "L"))
                 self.row6buttons[ind].bind('<Button-3>', lambda event="<Button-3>", y='alt', a="R": self.vupdownkey(event, y, a))
+        for row_idx, row in enumerate(self.all_buttons):
+          for col_idx, button in enumerate(row):
+              button.bind('<Button-1>', lambda e, r=row_idx, c=col_idx: self.on_button_click(r, c), add='+')
 
-        self.tips_space.config(text="Right click to hold\nSHIFT, CTRL, ALT or WIN keys", height=2)
+
         self.copy_button.config(command=lambda: self.vpresskey('ctrl+c'))
         self.cut_button.config(command=lambda: self.vpresskey('ctrl+x'))
         self.paste_button.config(command=lambda: self.vpresskey('ctrl+v'))
@@ -935,15 +978,9 @@ class VirtualKeyboard:
 
 
 if __name__ == '__main__':
-    # creates a keyboard body with no functionality
     keyboard1 = VirtualKeyboard()
 
-    # if user has keyboard module, adds functionality to keyboard
     if has_keyboard:
         keyboard1.engine()
 
-    # starts to display the keyboard
     keyboard1.start()
-
-
-    
