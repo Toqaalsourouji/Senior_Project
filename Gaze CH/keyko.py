@@ -977,10 +977,15 @@ class VirtualKeyboard:
         self.taskmnger_button.config(command=lambda: [self.removekbfromtop(), self.vpresskey('ctrl+shift+esc')])
 
 
-if __name__ == '__main__':
+
+def main():
     keyboard1 = VirtualKeyboard()
 
     if has_keyboard:
         keyboard1.engine()
 
-    keyboard1.start()
+    return keyboard1
+
+
+if __name__ == '__main__':
+    keyboard1 = main()
