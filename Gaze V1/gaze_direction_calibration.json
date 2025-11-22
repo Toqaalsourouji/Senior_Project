@@ -1,0 +1,244 @@
+{
+  "top_far_left": {
+    "grid_position": [
+      0,
+      0
+    ],
+    "x_threshold": [
+      -0.4041848368416146,
+      -0.35418483684161456
+    ],
+    "y_threshold": [
+      -0.1123389409109879,
+      -0.08833611067197247
+    ],
+    "sample_count": 30
+  },
+  "top_left": {
+    "grid_position": [
+      0,
+      1
+    ],
+    "x_threshold": [
+      -0.29230182154429984,
+      -0.24549874167351843
+    ],
+    "y_threshold": [
+      -0.1289175103258339,
+      -0.1203389409109879
+    ],
+    "sample_count": 30
+  },
+  "top_center": {
+    "grid_position": [
+      0,
+      2
+    ],
+    "x_threshold": [
+      -0.05371076039414861,
+      -0.026681332958621636
+    ],
+    "y_threshold": [
+      -0.16061280825055033,
+      -0.1369175103258339
+    ],
+    "sample_count": 30
+  },
+  "top_right": {
+    "grid_position": [
+      0,
+      3
+    ],
+    "x_threshold": [
+      0.140065104314565,
+      0.1939830017665569
+    ],
+    "y_threshold": [
+      -0.18304304920343942,
+      -0.16861280825055033
+    ],
+    "sample_count": 30
+  },
+  "top_far_right": {
+    "grid_position": [
+      0,
+      4
+    ],
+    "x_threshold": [
+      0.31835832239468614,
+      0.3447528938274394
+    ],
+    "y_threshold": [
+      -0.13306188669456703,
+      -0.053828198196689325
+    ],
+    "sample_count": 30
+  },
+  "middle_far_right": {
+    "grid_position": [
+      1,
+      4
+    ],
+    "x_threshold": [
+      0.3527528938274394,
+      0.3757084047126684
+    ],
+    "y_threshold": [
+      -0.22070261306406566,
+      -0.19104304920343942
+    ],
+    "sample_count": 30
+  },
+  "middle_right": {
+    "grid_position": [
+      1,
+      3
+    ],
+    "x_threshold": [
+      0.2019830017665569,
+      0.22244165508675073
+    ],
+    "y_threshold": [
+      -0.27371873363699895,
+      -0.22870261306406567
+    ],
+    "sample_count": 30
+  },
+  "center": {
+    "grid_position": [
+      1,
+      2
+    ],
+    "x_threshold": [
+      -0.10398645161315348,
+      -0.06171076039414862
+    ],
+    "y_threshold": [
+      -0.3214772293886862,
+      -0.28717892248827226
+    ],
+    "sample_count": 30
+  },
+  "middle_left": {
+    "grid_position": [
+      1,
+      1
+    ],
+    "x_threshold": [
+      -0.23749874167351842,
+      -0.1894278095671333
+    ],
+    "y_threshold": [
+      -0.27814611197742645,
+      -0.24493683955917703
+    ],
+    "sample_count": 30
+  },
+  "middle_far_left": {
+    "grid_position": [
+      1,
+      0
+    ],
+    "x_threshold": [
+      -0.3447506162976154,
+      -0.31970310926572
+    ],
+    "y_threshold": [
+      -0.31118207815368615,
+      -0.28614611197742645
+    ],
+    "sample_count": 30
+  },
+  "bottom_far_left": {
+    "grid_position": [
+      2,
+      0
+    ],
+    "x_threshold": [
+      -0.31170310926572,
+      -0.2859286551754507
+    ],
+    "y_threshold": [
+      -0.38586493874663225,
+      -0.3639731256638592
+    ],
+    "sample_count": 30
+  },
+  "bottom_left": {
+    "grid_position": [
+      2,
+      1
+    ],
+    "x_threshold": [
+      -0.18142780956713328,
+      -0.11198645161315349
+    ],
+    "y_threshold": [
+      -0.4159167226261659,
+      -0.39386493874663225
+    ],
+    "sample_count": 30
+  },
+  "bottom_center": {
+    "grid_position": [
+      2,
+      2
+    ],
+    "x_threshold": [
+      -0.046480501364866283,
+      0.02307097109145623
+    ],
+    "y_threshold": [
+      -0.37838633866719157,
+      -0.35446723358813215
+    ],
+    "sample_count": 30
+  },
+  "bottom_right": {
+    "grid_position": [
+      2,
+      3
+    ],
+    "x_threshold": [
+      0.06389512044856203,
+      0.18958569811213077
+    ],
+    "y_threshold": [
+      -0.4117152533950643,
+      -0.3863863386671916
+    ],
+    "sample_count": 30
+  },
+  "bottom_far_right": {
+    "grid_position": [
+      2,
+      4
+    ],
+    "x_threshold": [
+      0.23044165508675074,
+      0.26844911752317707
+    ],
+    "y_threshold": [
+      -0.3694714417862497,
+      -0.31947144178624964
+    ],
+    "sample_count": 30
+  },
+  "_metadata": {
+    "version": "2.0",
+    "calibration_date": "2025-11-21 01:27:39",
+    "grid_layout": {
+      "rows": 3,
+      "columns": 5,
+      "total_positions": 15
+    },
+    "sampling": {
+      "samples_per_position": 30,
+      "collection_time_per_position": 4.0,
+      "total_samples": 450
+    },
+    "screen_resolution": "1920x1080",
+    "threshold_method": "statistical_mad_with_overlap_resolution",
+    "algorithm_notes": "Using MAD (Median Absolute Deviation) for robust statistics"
+  }
+}
