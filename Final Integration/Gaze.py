@@ -368,50 +368,49 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
     print(f"GAZE:x={gaze_pitchyaw[1]},y={gaze_pitchyaw[0]},m={mouth_is_open}")
     
     # gaze_pitchyaw is what will be sent. 
-    #-------------------------------------------------#
-    #gaze_pitchyaw = gaze_smoother(gaze_pitchyaw, t=timestamp)
-    #pitch_rad = float(gaze_pitchyaw[0])
-    #yaw_rad   = float(gaze_pitchyaw[1])
-    #printXBF= np.degrees(pitch_rad)
-    #printYBF= np.degrees(yaw_rad)
-    #print(f"Raw: pitch_rad={printXBF}, yaw_rad={printYBF}") 
+    gaze_pitchyaw = gaze_smoother(gaze_pitchyaw, t=timestamp)
+    pitch_rad = float(gaze_pitchyaw[0])
+    yaw_rad   = float(gaze_pitchyaw[1])
+    printXBF= np.degrees(pitch_rad)
+    printYBF= np.degrees(yaw_rad)
+    print(f"Raw: pitch_rad={printXBF}, yaw_rad={printYBF}") 
             
-    #print("4 ADham")
+    print("4 ADham")
 
-    #if calibrator.needs_calibration() and not calibration_triggered:
-     #   calibrator.start_calibration()
-      #  calibration_triggered = True
+    if calibrator.needs_calibration() and not calibration_triggered:
+       calibrator.start_calibration()
+       calibration_triggered = True
 
-    #if calibrator.is_calibrating:
-     #   calibrator.add_sample(gaze_pitchyaw)
+    if calibrator.is_calibrating:
+       calibrator.add_sample(gaze_pitchyaw)
     
-    #print("1 ninja")
+    print("1 ninja")
 
-    #for the directional calibration 
-    #direction = None
-    #if direction_interpreter.is_loaded:
-     #   direction = direction_interpreter.interpret_gaze(pitch_rad, yaw_rad)
+    # for the directional calibration
+    direction = None
+    if direction_interpreter.is_loaded:
+       direction = direction_interpreter.interpret_gaze(pitch_rad, yaw_rad)
             
-    # if calibrator.is_calibrated():
-      #  ref_pitch_rad, ref_yaw_rad = calibrator.get_reference()
-       # calibrated_pitch_deg = np.degrees(pitch_rad - ref_pitch_rad)
-        # calibrated_yaw_deg   = np.degrees(yaw_rad   - ref_yaw_rad)
-    # else:
-      #  calibrated_pitch_deg = np.degrees(pitch_rad)
-      # calibrated_yaw_deg = np.degrees(yaw_rad)
-      #  print("5324 ninja")
+    if calibrator.is_calibrated():
+        ref_pitch_rad, ref_yaw_rad = calibrator.get_reference()
+        calibrated_pitch_deg = np.degrees(pitch_rad - ref_pitch_rad)
+        calibrated_yaw_deg   = np.degrees(yaw_rad   - ref_yaw_rad)
+    else:
+        calibrated_pitch_deg = np.degrees(pitch_rad)
+        calibrated_yaw_deg = np.degrees(yaw_rad)
+        print("5324 ninja")
 
-    # print(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}")
-    # sender_queue.put(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}") #here we send the gaze data to the queue, GAZE:x={calibrated_pitch_deg},y={calibrated_yaw_deg}
+    print(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}")
+    sender_queue.put(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}") #here we send the gaze data to the queue, GAZE:x={calibrated_pitch_deg},y={calibrated_yaw_deg}
 
-        # if mouse_enabled and calibrator.is_calibrated() and not calibrator.is_calibrating:
-        #     analog_mouse.update(calibrated_pitch_deg, calibrated_yaw_deg)
+    # if mouse_enabled and calibrator.is_calibrated() and not calibrator.is_calibrating:
+    #     analog_mouse.update(calibrated_pitch_deg, calibrated_yaw_deg)
 
 
-#testing function that the outputs from here send to the queue and we can get them from the queue 
-# def test_queue_sender(sender_queue):
-#     """Test-only function to check queue sending."""
-#     sender_queue.put("Did the gaze reach? Yes it did!")
+# testing function that the outputs from here send to the queue and we can get them from the queue 
+def test_queue_sender(sender_queue):
+    """Test-only function to check queue sending."""
+    sender_queue.put("Did the gaze reach? Yes it did!")
 
 
 
