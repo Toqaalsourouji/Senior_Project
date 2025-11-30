@@ -57,7 +57,7 @@ class VirtualKeyboard:
         self.master = master
 
         # Navigation state
-        self.current_row = 2
+        self.current_row = 3
         self.current_col = 6
         self.nav_enabled = True
         
@@ -102,7 +102,12 @@ class VirtualKeyboard:
 
         self.size_value_names = ["Microscope", "Small", "Medium", "Large", "Very Large", "GIGA SIZE"]
 
-        self.master.geometry(f"{self.size_value_map[self.size_current][0]}x{self.size_value_map[self.size_current][1]}")
+        # Calculate position - center horizontally, lower vertically
+        x_pos = (self.user_scr_width - self.size_value_map[self.size_current][0]) // 2
+        y_pos = int(self.user_scr_height * 0.6)  # 60% down the screen - adjust this value
+
+        self.master.geometry(f"{self.size_value_map[self.size_current][0]}x{self.size_value_map[self.size_current][1]}+{x_pos}+{y_pos}")
+        #self.master.geometry(f"{self.size_value_map[self.size_current][0]}x{self.size_value_map[self.size_current][1]}")
         self.master.resizable(False, False)
 
         self.row1keys = ["esc", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
