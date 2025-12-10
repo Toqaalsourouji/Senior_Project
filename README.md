@@ -242,9 +242,7 @@ Contains instructions for:
 
 * Assistive and accessibility devices
 * Medical communication tools
-* Smart home and IoT control
 * Hands-free computer navigation
-* Rehabilitation interfaces
 
 ---
 
