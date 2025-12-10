@@ -246,22 +246,19 @@ Contains instructions for:
 
 ---
 
-Legacy Development Folders (Trials & Experiments)
+## Legacy Development Folders (Trials & Experiments)
 
-This repository also contains several auxiliary folders such as Gaze CH, Gaze V1, Raspberry Pi, and TinyTrackerS.
-These folders represent early experimental stages, prototypes, or isolated trials that were explored during development. They are intentionally kept for:
+This repository also contains several auxiliary folders such as **Gaze CH**, **Gaze V1**, **Raspberry Pi**, and **TinyTrackerS**.
+These folders represent **early experimental stages, prototypes, or isolated trials** that were explored during development. They are intentionally kept for:
 
-traceability and documentation
+* traceability and documentation
+* reproducibility of previous model evaluations
+* academic transparency for the thesis
+* future reference or benchmarking
 
-reproducibility of previous model evaluations
+**Important Note:**
 
-academic transparency for the thesis
+> These folders are **not part of the final system architecture**.
+> The complete, production-ready implementation used in our thesis and demo is located exclusively inside the **`Final Integration/`** directory.
 
-future reference or benchmarking
-
-Important Note:
-
-These folders are not part of the final system architecture.
-The complete, production-ready implementation used in our thesis and demo is located exclusively inside the Final Integration/ directory.
-
-All source code required to run the full system, including calibration, gaze estimation, blink detection, communication, smoothing, and UI interaction, exists solely within the Final Integration folder.
+All source code required to run the full system, including calibration, gaze estimation, blink detection, communication, smoothing, and UI interaction, exists solely within the **Final Integration** folder.
