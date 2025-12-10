@@ -278,7 +278,7 @@ def estimate_gaze(img, landmark, session) -> np.ndarray:
 sender_queue = queue.Queue()
 initialized = False 
 
-def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS = Face Detection Session, GDS = Gaze Detection Session
+def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): #FDS = Face Detection Session, GDS = Gaze Detection Session
     global face_detection_session
     global gaze_estimation_session
     global gaze_smoother
@@ -315,10 +315,6 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
         print("Failed to detect faces")
         return ""
         
-    
-
-
-    
     landmark = get_mediapipe_landmarks(frame)
         
     #print("LANDMARK = ", landmark)
@@ -400,10 +396,6 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
     #     analog_mouse.update(calibrated_pitch_deg, calibrated_yaw_deg)
 
 
-# testing function that the outputs from here send to the queue and we can get them from the queue 
-def test_queue_sender(sender_queue):
-    """Test-only function to check queue sending."""
-    sender_queue.put("Did the gaze reach? Yes it did!")
 
 
 
