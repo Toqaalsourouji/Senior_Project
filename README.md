@@ -246,7 +246,7 @@ Contains instructions for:
 
 ---
 
-## Legacy Development Folders (Trials & Experiments)
+# Legacy Development Folders (Trials & Experiments)
 
 This repository also contains several auxiliary folders such as **Gaze CH**, **Gaze V1**, **Raspberry Pi**, and **TinyTrackerS**.
 These folders represent **early experimental stages, prototypes, or isolated trials** that were explored during development. They are intentionally kept for:
