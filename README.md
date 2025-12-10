@@ -246,17 +246,3 @@ Contains instructions for:
 
 ---
 
-# Design Highlights
-
-* Modular and replaceable subsystems
-* Personalized calibration
-* Signal smoothing for stability
-* Gesture + direction fusion
-* Remote deployment capability
-* Fully operational virtual keyboard
-
----
-
-# Status
-
-This folder represents the **final integrated implementation** used in the thesis project.
