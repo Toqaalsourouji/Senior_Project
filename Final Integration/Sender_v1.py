@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Optimized sender for Raspberry Pi Zero 2W
-Constraints respected:
-- Camera stays at 640×480 (required)
-- Blink detection processes every frame (required)
-- Optimizations focus on threading and internal downsampling
-"""
 
 import serial
 import time
@@ -20,13 +12,10 @@ from collections import deque
 from time import sleep 
 from picamera2 import Picamera2
 from Gaze import start_gaze_loop
-from Blinking_PI_v2_TOQA import BlinkEngine 
+from Blinking import BlinkEngine 
 from Calibration_Pi import GazeCalibrationSystem
 import onnxruntime
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
 
 # Camera resolution (CONSTRAINT: Must stay at 640×480)
 CAMERA_WIDTH = 640
@@ -58,9 +47,6 @@ logging.basicConfig(
 )
 logging.info("=== Optimized boot script started ===")
 
-# ============================================================================
-# GLOBAL VARIABLES
-# ============================================================================
 
 # Thread-safe buffers
 frame_buffer = deque(maxlen=2)
@@ -78,9 +64,6 @@ face_bbox_cache = None
 face_cache_counter = 0
 face_cache_lock = threading.Lock()
 
-# ============================================================================
-# SERIAL COMMUNICATION
-# ============================================================================
 
 def find_serial_port():
     """Find USB gadget serial port."""
@@ -92,10 +75,6 @@ def find_serial_port():
         logging.warning(f"Cannot open /dev/ttyGS0: {e}")
         return None
 
-
-# ============================================================================
-# ONNX MODEL LOADING
-# ============================================================================
 
 def load_optimized_onnx_model(model_path):
     """Load ONNX model with ARM CPU optimizations."""
@@ -129,9 +108,6 @@ def load_optimized_onnx_model(model_path):
         raise
 
 
-# ============================================================================
-# SYNCHRONOUS PROCESSING (Fallback)
-# ============================================================================
 
 def camera_loop_sync(ser, picam2, blink_engine):
     """
@@ -183,9 +159,6 @@ def camera_loop_sync(ser, picam2, blink_engine):
             time.sleep(0.1)
 
 
-# ============================================================================
-# ASYNCHRONOUS PROCESSING (Recommended)
-# ============================================================================
 
 def camera_capture_thread(picam2):
     """
@@ -283,9 +256,6 @@ def blink_processing_thread(ser, blink_engine):
             time.sleep(0.1)
 
 
-# ============================================================================
-# MAIN FUNCTION
-# ============================================================================
 
 def main():
     global face_detection_session, gaze_estimation_session
@@ -417,9 +387,6 @@ def main():
     logging.info("Program terminated")
 
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 
 if __name__ == "__main__":
     try:
@@ -430,3 +397,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Unhandled exception: {e}", exc_info=True)
         sys.exit(1)
+
