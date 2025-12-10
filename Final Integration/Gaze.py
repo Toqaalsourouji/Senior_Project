@@ -305,12 +305,6 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
         calibration_triggered = False
 
     
-    print("1 Hassan")
-    
-
-    print("2 Yussef")
-
-    
     cnt = 0
     # mouse_enabled = True
     #print("Frame = ", frame)
@@ -322,7 +316,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
         return ""
         
     
-    print("1 Toqa")
+
 
     
     landmark = get_mediapipe_landmarks(frame)
@@ -346,7 +340,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
     mouth_dist = mouth_open_amount(landmark)
     mouth_is_open = mouth_dist > MOUTH_OPEN_THRESHOLD
     
-    print(1)
+
 
     # If mouth just transitioned from CLOSED → OPEN
     if mouth_is_open and not mouth_was_open:
@@ -362,7 +356,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
             
     mouth_was_open = mouth_is_open  
     
-    print(4)    
+ 
     
     sender_queue.put(f"GAZE:x={gaze_pitchyaw[1]},y={gaze_pitchyaw[0]},m={mouth_is_open}")
     print(f"GAZE:x={gaze_pitchyaw[1]},y={gaze_pitchyaw[0]},m={mouth_is_open}")
@@ -375,7 +369,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
     printYBF= np.degrees(yaw_rad)
     print(f"Raw: pitch_rad={printXBF}, yaw_rad={printYBF}") 
             
-    print("4 ADham")
+
 
     if calibrator.needs_calibration() and not calibration_triggered:
        calibrator.start_calibration()
@@ -383,8 +377,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
 
     if calibrator.is_calibrating:
        calibrator.add_sample(gaze_pitchyaw)
-    
-    print("1 ninja")
+
 
     # for the directional calibration
     direction = None
@@ -398,7 +391,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
     else:
         calibrated_pitch_deg = np.degrees(pitch_rad)
         calibrated_yaw_deg = np.degrees(yaw_rad)
-        print("5324 ninja")
+
 
     print(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}")
     sender_queue.put(f"GAZE:x={calibrated_yaw_deg},y={calibrated_pitch_deg}") #here we send the gaze data to the queue, GAZE:x={calibrated_pitch_deg},y={calibrated_yaw_deg}
@@ -411,6 +404,7 @@ def start_gaze_loop(sender_queue, frame, timestamp, FDS, GDS): # For Toqa : FDS 
 def test_queue_sender(sender_queue):
     """Test-only function to check queue sending."""
     sender_queue.put("Did the gaze reach? Yes it did!")
+
 
 
 
