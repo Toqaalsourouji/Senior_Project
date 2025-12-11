@@ -246,6 +246,17 @@ Contains instructions for:
 
 ---
 
+# Model Source Attribution
+
+The gaze-estimation models used in this project are adapted from the open-source implementation provided by **MIT Han Lab** under the `proxyless_gaze` framework.  
+We acknowledge and thank the authors for their contribution to the research community.
+
+🔗 Repository: https://github.com/mit-han-lab/proxylessnas/tree/master/proxyless_gaze
+
+> Note: All pretrained models and related components included from this repository remain under their original open-source license terms. The authors of this thesis do not claim ownership over the model architecture or pretrained weights.
+
+---
+
 # Legacy Development Folders (Trials & Experiments)
 
 This repository also contains several auxiliary folders such as **Gaze CH**, **Gaze V1**, and **TinyTrackerS**.
